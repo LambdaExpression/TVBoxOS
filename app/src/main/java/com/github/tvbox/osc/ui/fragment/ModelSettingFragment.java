@@ -280,6 +280,15 @@ public class ModelSettingFragment extends BaseLazyFragment {
                 ((BaseActivity) requireActivity()).changeWallpaper(true);
             }
         });
+        View driveLogin = findViewById(R.id.llDriveLogin);
+        if (driveLogin != null) {
+            driveLogin.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    openDriveLogin(v);
+                }
+            });
+        }
         findViewById(R.id.llHomeApi).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -957,6 +966,62 @@ public class ModelSettingFragment extends BaseLazyFragment {
             historyParams.setMarginEnd(margin);
             llApiHistory.setLayoutParams(historyParams);
         }
+    }
+
+    /**
+     * 打开订阅里的「我的云盘」，用爬虫包自带的登录。登录状态不由应用保存。
+     * 会把当前首页站源换成这个站点，登完可以在首页站源里切回去。
+     *
+     * @param view 被点击的设置行
+     */
+    private void openDriveLogin(View view) {
+        FastClickCheckUtil.check(view);
+        SourceBean drive = findDriveSource();
+        if (drive == null) {
+            Toast.makeText(mContext, "当前配置里没有我的云盘", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ApiConfig.get().setSourceBean(drive);
+        if (tvHomeApi != null && drive.getName() != null) {
+            tvHomeApi.setText(drive.getName());
+        }
+        EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_HOME_SOURCE_CHANGE));
+        if (mActivity != null) {
+            mActivity.finish();
+        }
+    }
+
+    /**
+     * 找订阅里用来登录网盘的站点。优先固定 key，其次爬虫类名，最后按名称。
+     *
+     * @return 找不到时返回 null
+     */
+    private SourceBean findDriveSource() {
+        SourceBean byKey = ApiConfig.get().getSource("MDrive");
+        if (byKey != null && byKey.getType() == 3) {
+            return byKey;
+        }
+        List<SourceBean> sites = ApiConfig.get().getSourceBeanList();
+        if (sites == null) {
+            return null;
+        }
+        for (SourceBean site : sites) {
+            if (site == null || site.getApi() == null) {
+                continue;
+            }
+            if ("csp_MyDriveGuard".equals(site.getApi())) {
+                return site;
+            }
+        }
+        for (SourceBean site : sites) {
+            if (site == null || site.getName() == null) {
+                continue;
+            }
+            if (site.getName().contains("我的云盘")) {
+                return site;
+            }
+        }
+        return null;
     }
 
     private void restartApp() {
