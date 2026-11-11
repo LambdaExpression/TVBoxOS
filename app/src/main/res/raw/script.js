@@ -254,19 +254,56 @@ function doDelFile(yes) {
     }
 }
 
+var logTimer = null;
+
+/** 读取电视上最近 500 条运行日志。人停在底部时继续跟着新日志，往上翻时不把位置拉回去。 */
 function loadLog() {
+    var box = document.getElementById('runtime_log');
+    if (!box) {
+        return;
+    }
+    var nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    var previous = box.scrollTop;
     $.ajax({
         url: '/log',
         method: 'GET',
         cache: false,
         dataType: 'text',
         success: function (data) {
-            $('#runtime_log').text(data && data.length ? data : '暂无日志');
+            var text = data && data.length ? data : '暂无日志';
+            if (box.textContent === text) {
+                return;
+            }
+            box.textContent = text;
+            box.scrollTop = nearBottom ? box.scrollHeight : previous;
         },
         error: function () {
-            $('#runtime_log').text('读取日志失败');
+            box.textContent = '读取日志失败';
         }
     });
+}
+
+/** 停在日志页时每 3 秒拉一次。离开这一页就停，避免空转。 */
+function startLogRefresh() {
+    loadLog();
+    if (logTimer) {
+        return;
+    }
+    logTimer = setInterval(function () {
+        if ($('#panel4').css('display') === 'none') {
+            stopLogRefresh();
+            return;
+        }
+        loadLog();
+    }, 3000);
+}
+
+function stopLogRefresh() {
+    if (!logTimer) {
+        return;
+    }
+    clearInterval(logTimer);
+    logTimer = null;
 }
 
 function clearLog() {
@@ -289,9 +326,11 @@ function showPanel(id) {
         listFile('')
     }
     if (id === 4) {
-        loadLog();
+        startLogRefresh();
+    } else {
+        stopLogRefresh();
     }
-    $(panelId).css('display', 'block');
+    $(panelId).css('display', id === 4 ? 'flex' : 'block');
     $(panelId).siblings('.weui-tab__panel').css('display', 'none');
 }
 

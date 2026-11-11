@@ -376,12 +376,18 @@ public class HomeActivity extends BaseActivity {
         });
     }
 
-    /** 这一轮首页刷新结束，不再接收同一次请求的后续结果。 */
+    /**
+     * 这一轮首页刷新结束，不再接收同一次请求的后续结果。
+     * 失败后保留当前页、或内容和画面相同时，不会走到重新画分类那一步，标题闪烁也要在这里停掉。
+     */
     private void finishHomeSortRefresh() {
         homeSortAwaitingRefresh = false;
         homeSortLoading = false;
         homeSortPending = false;
         loadingSourceKey = null;
+        if (tvName != null) {
+            tvName.clearAnimation();
+        }
     }
 
     /**

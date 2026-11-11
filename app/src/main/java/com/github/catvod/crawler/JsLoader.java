@@ -59,7 +59,11 @@ public class JsLoader {
             File cacheDir = new File(App.getInstance().getCacheDir().getAbsolutePath() + "/catvod_jsapi");
             if (!cacheDir.exists())
                 cacheDir.mkdirs();
-            DexClassLoader classLoader = new DexClassLoader(jar, cacheDir.getAbsolutePath(), null, App.getInstance().getClassLoader());
+            // 和主爬虫包共用同一份缓存文件。直接打开会被更新时删掉，JS 搜索随后全部失效。
+            File source = new File(jar);
+            File copy = new File(cacheDir, "js-" + key + "-" + System.currentTimeMillis() + ".jar");
+            JarLoader.copyJar(source, copy);
+            DexClassLoader classLoader = new DexClassLoader(copy.getAbsolutePath(), cacheDir.getAbsolutePath(), null, App.getInstance().getClassLoader());
             int count = 0;
             do {
                 try {

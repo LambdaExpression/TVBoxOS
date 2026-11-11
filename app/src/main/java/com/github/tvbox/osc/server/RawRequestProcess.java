@@ -31,11 +31,16 @@ public class RawRequestProcess implements RequestProcess {
         return session.getMethod() == NanoHTTPD.Method.GET && this.fileName.equalsIgnoreCase(fileName);
     }
 
+    /**
+     * 读出打包进应用的页面资源。禁止浏览器缓存，否则装了新包仍会打开旧的局域网首页，日志页签出不来。
+     */
     @Override
     public NanoHTTPD.Response doResponse(NanoHTTPD.IHTTPSession session, String fileName, Map<String, String> params, Map<String, String> files) {
         InputStream inputStream = mContext.getResources().openRawResource(this.resourceId);
         try {
-            return RemoteServer.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, mimeType + "; charset=utf-8", inputStream, (long) inputStream.available());
+            NanoHTTPD.Response response = RemoteServer.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, mimeType + "; charset=utf-8", inputStream, (long) inputStream.available());
+            response.addHeader("Cache-Control", "no-store");
+            return response;
         } catch (IOException IOExc) {
             return RemoteServer.createPlainTextResponse(NanoHTTPD.Response.Status.INTERNAL_ERROR, "SERVER INTERNAL ERROR: IOException: " + IOExc.getMessage());
         }

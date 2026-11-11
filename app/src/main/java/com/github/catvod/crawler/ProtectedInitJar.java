@@ -6,6 +6,7 @@ import android.util.Base64;
 import android.util.Log;
 
 import com.github.tvbox.osc.base.App;
+import com.github.tvbox.osc.util.CloudLoginKeep;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -54,7 +55,10 @@ class ProtectedInitJar {
         bindContext(clz, init);
         if (!bindDexLoader(clz, init)) return false;
         // 部分 JAR 的首页依赖 saveConfig() 初始化的本地配置。
+        // 它有时会用远程空模板盖掉上次登录，先记下再在被清空时写回。
+        java.util.Map<File, byte[]> cloudLogin = CloudLoginKeep.snapshot();
         invokeNoArg(clz, "saveConfig");
+        CloudLoginKeep.restore(cloudLogin);
         invokeNoArg(clz, "replaceCloudDiskNames");
         invokeStartGoProxy(clz);
         return true;

@@ -21,3 +21,43 @@ body {
   box-sizing: border-box;
   z-index: 1;
 }
+/* 日志页签要占满底栏以上的高度。min-height:0 才能把过长正文收进内部滚动，而不是把底栏顶出去。 */
+.weui-tab__panel {
+  min-height: 0;
+}
+#panel4 {
+  -webkit-flex-direction: column;
+  flex-direction: column;
+  overflow: hidden;
+}
+.log-panel {
+  -webkit-box-flex: 1;
+  -webkit-flex: 1 1 auto;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 28px;
+  padding-bottom: 12px;
+  box-sizing: border-box;
+}
+.log-toolbar {
+  flex: none;
+  text-align: center;
+  margin: 8px 16px 12px;
+}
+.log-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  text-align: left;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 16px;
+  padding: 12px;
+  background: #111;
+  color: #ddd;
+  font-size: 12px;
+  line-height: 1.5;
+}
