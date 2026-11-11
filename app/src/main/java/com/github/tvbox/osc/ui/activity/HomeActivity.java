@@ -432,6 +432,12 @@ public class HomeActivity extends BaseActivity {
 
     private boolean dataInitOk = false;
     private boolean jarInitOk = false;
+    /** 本地配置已经能用，首页壳先显示，不再用全屏转圈挡住分类和爬虫包。 */
+    private boolean homeShellShown = false;
+    /** 爬虫包加载代次。超时后迟到的成功或失败不再重开一轮。 */
+    private int jarLoadToken = 0;
+    /** 爬虫包迟迟不回调时结束等待，避免首页一直转圈。 */
+    private Runnable jarLoadTimeout;
     /** 配置在显示缓存后又被刷新时递增，丢掉过期的 initData。 */
     private int configEpoch = 0;
     /** 当前已经拿来加载爬虫包的地址。配置刷新后地址变了才重新加载。 */
@@ -440,6 +446,7 @@ public class HomeActivity extends BaseActivity {
 
     private void initData() {
         if (dataInitOk && jarInitOk) {
+            showHomeShell();
             loadHomeSort(false);
             if (hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
                 LOG.e("有");
@@ -451,21 +458,35 @@ public class HomeActivity extends BaseActivity {
             }
             return;
         }
-        tvNameAnimation();
-        showLoading();
+        // 订阅已经解析进内存就先进入首页。爬虫包和分类还在后台，不再盖一层全屏转圈。
+        if (dataInitOk) {
+            showHomeShell();
+        } else {
+            tvNameAnimation();
+            showLoading();
+        }
         if (dataInitOk && !jarInitOk) {
             String spiderNow = ApiConfig.get().getSpider();
             if (spiderNow != null && !spiderNow.isEmpty()) {
                 final String loadingSpider = spiderNow;
+                final int token = ++jarLoadToken;
+                armJarLoadTimeout(token, loadingSpider);
                 ApiConfig.get().loadJar(useCacheConfig, loadingSpider, new ApiConfig.LoadConfigCallback() {
                     @Override
                     public void success() {
                         // 配置已经换成另一份爬虫时，这一轮的成功不能把首页提前放出来。
-                        if (!loadingSpider.equals(ApiConfig.get().getSpider())) {
+                        if (token != jarLoadToken || !loadingSpider.equals(ApiConfig.get().getSpider())) {
                             return;
                         }
+                        cancelJarLoadTimeout();
+                        boolean late = jarInitOk;
                         jarInitOk = true;
                         shownSpider = loadingSpider;
+                        if (late) {
+                            // 超时后已经进过首页，包这时才加载完，补一次分类。
+                            loadHomeSort(true);
+                            return;
+                        }
                         mHandler.postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -499,7 +520,11 @@ public class HomeActivity extends BaseActivity {
 
                     @Override
                     public void error(String msg) {
-                        if (!loadingSpider.equals(ApiConfig.get().getSpider())) {
+                        if (token != jarLoadToken || !loadingSpider.equals(ApiConfig.get().getSpider())) {
+                            return;
+                        }
+                        cancelJarLoadTimeout();
+                        if (jarInitOk) {
                             return;
                         }
                         jarInitOk = true;
@@ -643,15 +668,19 @@ public class HomeActivity extends BaseActivity {
             previousHomeName = tvName.getText() == null ? null : tvName.getText().toString();
             tvName.setText(home.getName());
         }
-        tvNameAnimation();
+        // 首页已经打开时，分类还在拉也不要把标题打成一直闪，避免看起来仍在转圈。
+        if (!homeShellShown || keepCurrentContent) {
+            tvNameAnimation();
+        }
         if (home == null) {
             loadingSourceKey = null;
-            if (!keepCurrentContent) showLoading();
+            if (!keepCurrentContent && !homeShellShown) showLoading();
             sourceViewModel.getSort(null);
             return;
         }
         loadingSourceKey = home.getKey();
-        if (!keepCurrentContent) {
+        // 首页壳已经在，分类慢或失败都不能再把全屏转圈盖回来。
+        if (!keepCurrentContent && !homeShellShown) {
             showLoading();
         }
         sourceViewModel.getSort(loadingSourceKey);
@@ -1120,6 +1149,60 @@ public class HomeActivity extends BaseActivity {
                 mSiteSwitchDialog.dismiss();
             }
             mSiteSwitchDialog = null;
+        }
+    }
+
+    /**
+     * 本地订阅已经可用时先画出首页（至少有「主页」），关掉全屏转圈。
+     * 分类列表稍后到达再补；这里不取消正在进行的分类请求。
+     */
+    private void showHomeShell() {
+        if (homeShellShown || isActivityUnavailable()) {
+            return;
+        }
+        homeShellShown = true;
+        showSuccess();
+        tvName.clearAnimation();
+        SourceBean home = ApiConfig.get().getHomeSourceBean();
+        if (home != null && home.getName() != null && !home.getName().isEmpty()) {
+            tvName.setText(home.getName());
+        }
+        if (sortAdapter.getData().isEmpty()) {
+            String key = home == null ? "" : home.getKey();
+            sortAdapter.setNewData(DefaultConfig.adjustSort(key, new ArrayList<MovieSort.SortData>(), true));
+            initViewPager(null);
+        }
+        LOG.i("echo-home-shell");
+    }
+
+    /**
+     * 爬虫包 15 秒还没有回调就先结束等待。加载线程如果一直不返回，首页不能跟着挂住。
+     *
+     * @param token         这一轮加载的代次
+     * @param loadingSpider 这一轮正在加载的爬虫地址
+     */
+    private void armJarLoadTimeout(final int token, final String loadingSpider) {
+        cancelJarLoadTimeout();
+        jarLoadTimeout = new Runnable() {
+            @Override
+            public void run() {
+                if (token != jarLoadToken || jarInitOk) {
+                    return;
+                }
+                LOG.e("echo-jar-load-timeout: " + loadingSpider);
+                jarInitOk = true;
+                shownSpider = loadingSpider == null ? "" : loadingSpider;
+                initData();
+            }
+        };
+        mHandler.postDelayed(jarLoadTimeout, 15000);
+    }
+
+    /** 爬虫包已经成功、失败或被新的一轮替换时，去掉超时。 */
+    private void cancelJarLoadTimeout() {
+        if (jarLoadTimeout != null) {
+            mHandler.removeCallbacks(jarLoadTimeout);
+            jarLoadTimeout = null;
         }
     }
 
