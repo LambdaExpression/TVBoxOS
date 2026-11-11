@@ -336,4 +336,24 @@ public class PlayerHelper {
     public static long exoCacheSizeBytes() {
         return exoCacheSizeMb() * 1024L * 1024L;
     }
+
+    /**
+     * 把缓存占用格式化成设置页上的短文字。
+     *
+     * @param bytes 已用字节，负数按 0
+     * @return 例如 0B、12KB、3.5MB、1.2GB
+     */
+    public static String formatCacheBytes(long bytes) {
+        long size = bytes < 0 ? 0 : bytes;
+        if (size < 1024L) {
+            return size + "B";
+        }
+        if (size < 1024L * 1024L) {
+            return (size / 1024L) + "KB";
+        }
+        if (size < 1024L * 1024L * 1024L) {
+            return new DecimalFormat("0.#").format(size / (1024.0 * 1024.0)) + "MB";
+        }
+        return new DecimalFormat("0.##").format(size / (1024.0 * 1024.0 * 1024.0)) + "GB";
+    }
 }

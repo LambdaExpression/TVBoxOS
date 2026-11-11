@@ -37,6 +37,7 @@ import com.github.tvbox.osc.ui.dialog.BackupDialog;
 import com.github.tvbox.osc.ui.dialog.DanmuApiDialog;
 import com.github.tvbox.osc.ui.dialog.SearchRemoteTvDialog;
 import com.github.tvbox.osc.ui.dialog.SelectDialog;
+import com.github.tvbox.osc.ui.dialog.TipDialog;
 import com.github.tvbox.osc.ui.dialog.XWalkInitDialog;
 import com.github.tvbox.osc.util.DanmuHelper;
 import com.github.tvbox.osc.util.FastClickCheckUtil;
@@ -46,6 +47,7 @@ import com.github.tvbox.osc.util.HistoryHelper;
 import com.github.tvbox.osc.util.LOG;
 import com.github.tvbox.osc.util.OkGoHelper;
 import com.github.tvbox.osc.util.PlayerHelper;
+import xyz.doikki.videoplayer.exo.ExoMediaSourceHelper;
 import com.github.tvbox.osc.viewmodel.SourceViewModel;
 import com.lzy.okgo.OkGo;
 import com.lzy.okgo.callback.FileCallback;
@@ -105,6 +107,10 @@ public class ModelSettingFragment extends BaseLazyFragment {
     private TextView tvExoCachePlay;
     /** Exo 缓存上限的当前文字。 */
     private TextView tvExoCacheSize;
+    /** Exo 磁盘缓存已经占用的大小。 */
+    private TextView tvExoCacheUsed;
+    /** 丢掉过期的容量统计，避免清空后又被旧结果盖回去。 */
+    private int exoCacheUsageToken;
     private TextView tvHomeDefaultShow;
     private ApiDialog apiDialog;
     private boolean selectLocalLive;
@@ -161,6 +167,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
         tvIjkCachePlay = findViewById(R.id.tvIjkCachePlay);
         tvExoCachePlay = findViewById(R.id.tvExoCachePlay);
         tvExoCacheSize = findViewById(R.id.tvExoCacheSize);
+        tvExoCacheUsed = findViewById(R.id.tvExoCacheUsed);
         tvMediaCodec.setText(Hawk.get(HawkConfig.IJK_CODEC, "硬解码"));
         tvDebugOpen.setText(Hawk.get(HawkConfig.DEBUG_OPEN, false) ? "已打开" : "已关闭");
         tvParseWebView.setText(Hawk.get(HawkConfig.PARSE_WEBVIEW, true) ? "系统自带" : "XWalkView");
@@ -855,6 +862,15 @@ public class ModelSettingFragment extends BaseLazyFragment {
                 }
             });
         }
+        View exoCacheUsed = findViewById(R.id.llExoCacheUsed);
+        if (exoCacheUsed != null) {
+            exoCacheUsed.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    onClickClearExoCache(v);
+                }
+            });
+        }
         findViewById(R.id.llIjkCachePlay).setOnClickListener((view -> onClickIjkCachePlay(view)));
         findViewById(R.id.llClearCache).setOnClickListener((view -> onClickClearCache(view)));
     }
@@ -951,6 +967,114 @@ public class ModelSettingFragment extends BaseLazyFragment {
             startActivity(intent);
             System.exit(0);
         }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        refreshExoCacheUsage();
+    }
+
+    /**
+     * 后台统计 Exo 缓存目录占用。回到设置页时刷新，旧的统计结果不再写回。
+     */
+    private void refreshExoCacheUsage() {
+        if (tvExoCacheUsed == null || mContext == null) {
+            return;
+        }
+        final int token = ++exoCacheUsageToken;
+        final android.content.Context app = mContext.getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final long bytes = ExoMediaSourceHelper.getInstance(app).playbackCacheUsedBytes();
+                final String text = PlayerHelper.formatCacheBytes(bytes);
+                if (mActivity == null) {
+                    return;
+                }
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!isAdded() || token != exoCacheUsageToken || tvExoCacheUsed == null) {
+                            return;
+                        }
+                        tvExoCacheUsed.setText(text);
+                    }
+                });
+            }
+        }, "exo-cache-usage").start();
+    }
+
+    /**
+     * 确认后清空 Exo 点播磁盘缓存，并重新统计占用。
+     *
+     * @param view 被点击的设置行
+     */
+    private void onClickClearExoCache(View view) {
+        FastClickCheckUtil.check(view);
+        if (mContext == null) {
+            return;
+        }
+        String used = tvExoCacheUsed == null || tvExoCacheUsed.getText() == null ? "" : tvExoCacheUsed.getText().toString();
+        String tip = used.length() == 0 || "统计中".equals(used) ? "清空 Exo 播放缓存？" : "清空 Exo 播放缓存？当前已用 " + used;
+        final TipDialog[] holder = new TipDialog[1];
+        TipDialog dialog = new TipDialog(mContext, tip, "清空", "取消", new TipDialog.OnListener() {
+            @Override
+            public void left() {
+                if (holder[0] != null && holder[0].isShowing()) {
+                    holder[0].dismiss();
+                }
+                clearExoCacheFiles();
+            }
+
+            @Override
+            public void right() {
+                if (holder[0] != null && holder[0].isShowing()) {
+                    holder[0].dismiss();
+                }
+            }
+
+            @Override
+            public void cancel() {
+                if (holder[0] != null && holder[0].isShowing()) {
+                    holder[0].dismiss();
+                }
+            }
+        });
+        holder[0] = dialog;
+        dialog.show();
+    }
+
+    /** 在后台删掉缓存文件。正在播放的这一路可能中断，下次播放会重建。 */
+    private void clearExoCacheFiles() {
+        if (mContext == null) {
+            return;
+        }
+        exoCacheUsageToken++;
+        final android.content.Context app = mContext.getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ExoMediaSourceHelper.getInstance(app).clearPlaybackCache();
+                } catch (RuntimeException ex) {
+                    LOG.e("echo-exo-cache-clear: " + ex.getMessage());
+                }
+                if (mActivity == null) {
+                    return;
+                }
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!isAdded()) {
+                            return;
+                        }
+                        Toast.makeText(mContext, "Exo 缓存已清空", Toast.LENGTH_SHORT).show();
+                        refreshExoCacheUsage();
+                    }
+                });
+            }
+        }, "exo-cache-clear").start();
     }
 
     /**

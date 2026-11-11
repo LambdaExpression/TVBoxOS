@@ -223,7 +223,7 @@ public final class ExoMediaSourceHelper {
     /**
      * 同一目录只能有一块缓存。上限变了先释放旧的，再建新的。
      */
-    private void ensureCache() {
+    private synchronized void ensureCache() {
         long desired = cacheMaxBytes > 0 ? cacheMaxBytes : 512L * 1024 * 1024;
         if (mCache != null && cacheBuiltBytes == desired) {
             return;
@@ -234,7 +234,7 @@ public final class ExoMediaSourceHelper {
         Log.i(TAG, "echo-exo-cache-ready bytes=" + desired);
     }
 
-    private void releaseCache() {
+    private synchronized void releaseCache() {
         Cache cache = mCache;
         mCache = null;
         cacheBuiltBytes = 0;
@@ -254,9 +254,71 @@ public final class ExoMediaSourceHelper {
      */
     private Cache newCache(long maxBytes) {
         return new SimpleCache(
-                new File(externalCacheDir(), "exo-video-cache"),
+                playbackCacheDir(),
                 new LeastRecentlyUsedCacheEvictor(maxBytes),
                 new ExoDatabaseProvider(mAppContext));
+    }
+
+    /**
+     * 点播磁盘缓存目录。没有外置缓存目录时用应用私有缓存。
+     */
+    public File playbackCacheDir() {
+        return new File(externalCacheDir(), "exo-video-cache");
+    }
+
+    /**
+     * 统计目录里已经落下的缓存文件。缓存还没打开时也能算。
+     *
+     * @return 字节数，目录不存在时为 0
+     */
+    public long playbackCacheUsedBytes() {
+        return folderBytes(playbackCacheDir());
+    }
+
+    /**
+     * 先放开正在使用的缓存，再删掉目录。正在播放的这一路可能会失败，下次播放会重新建缓存。
+     */
+    public synchronized void clearPlaybackCache() {
+        releaseCache();
+        deleteTree(playbackCacheDir());
+    }
+
+    private static long folderBytes(File file) {
+        if (file == null || !file.exists()) {
+            return 0L;
+        }
+        if (!file.isDirectory()) {
+            return Math.max(0L, file.length());
+        }
+        File[] children = file.listFiles();
+        if (children == null) {
+            return 0L;
+        }
+        long total = 0L;
+        for (File child : children) {
+            if (child == null) {
+                continue;
+            }
+            total += folderBytes(child);
+        }
+        return total;
+    }
+
+    private static void deleteTree(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteTree(child);
+                }
+            }
+        }
+        if (!file.delete()) {
+            Log.i(TAG, "echo-exo-cache-delete-failed: " + file.getAbsolutePath());
+        }
     }
 
     private File externalCacheDir()
