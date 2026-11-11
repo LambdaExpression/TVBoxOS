@@ -105,14 +105,12 @@ public class ApiConfig {
     private final ExecutorService danmuSearchExecutor = Executors.newSingleThreadExecutor();
 
     private final String userAgent = "okhttp/3.15";
-    /** 保护当前正在用的配置正文和尚未换上的后台结果。 */
+    /** 保护当前正在用的配置正文。后台新结果只写磁盘，不在这次进程里换上。 */
     private final Object configUpdateLock = new Object();
     /** 这次已经解析进内存、用户正在用的配置正文。 */
     private String shownConfigBody = "";
-    /** 后台拉到、等用户回到首页再换上的配置。为空表示没有待换内容。 */
-    private String pendingConfigBody;
-    /** pendingConfigBody 对应的订阅地址。地址变了就不再换上。 */
-    private String pendingConfigUrl;
+    /** shownConfigBody 对应的订阅地址。地址变了必须重新加载，不能沿用内存里的旧配置。 */
+    private String shownConfigUrl = "";
 
     private ApiConfig() {
         clearLoader();
@@ -274,6 +272,13 @@ public class ApiConfig {
             callback.error("-1");
             return;
         }
+        // 这次进程已经在用一份配置。磁盘上的新内容留给下次启动，避免回到首页时中途换站点和爬虫。
+        if (reuseRunningConfig(apiUrl, callback)) {
+            if (!useCache) {
+                refreshConfigInBackground(apiUrl, configCacheFile(apiUrl), true, callback, activity);
+            }
+            return;
+        }
         File cache = configCacheFile(apiUrl);
         if (cache.isFile() && cache.length() > 0) {
             try {
@@ -327,10 +332,7 @@ public class ApiConfig {
         parseJson(apiUrl, json);
         synchronized (configUpdateLock) {
             shownConfigBody = json;
-            if (json.equals(pendingConfigBody) && apiUrl.equals(pendingConfigUrl)) {
-                pendingConfigBody = null;
-                pendingConfigUrl = null;
-            }
+            shownConfigUrl = apiUrl;
         }
         LOG.i("echo-config-local url=" + apiUrl + " sites=" + sourceBeanList.size());
         callback.success();
@@ -338,7 +340,8 @@ public class ApiConfig {
     }
 
     /**
-     * 后台拉取订阅。本地已经在用时，失败只记到设置页；成功且内容有变化时先写入缓存，等回到首页再换。
+     * 后台拉取订阅。本地已经在用时，失败只记到设置页。
+     * 成功且内容有变化时写入缓存，这次进程继续用旧配置，下次启动再读新文件。
      */
     private void refreshConfigInBackground(final String apiUrl, final File cache, final boolean deliveredLocal, final LoadConfigCallback callback, final Activity activity) {
         setConfigUpdateStatus("更新中");
@@ -369,21 +372,18 @@ public class ApiConfig {
                     }
                     FileUtils.saveCache(cache, json);
                     if (deliveredLocal) {
-                        if (!same) {
-                            synchronized (configUpdateLock) {
-                                pendingConfigBody = json;
-                                pendingConfigUrl = apiUrl;
-                            }
-                        }
                         LOG.i("echo-config-refresh url=" + apiUrl + " sites=" + sites + " changed=" + !same);
-                        setConfigUpdateStatus("成功 " + configUpdateTime());
+                        if (!same) {
+                            setConfigUpdateStatus("成功，下次启动生效 " + configUpdateTime());
+                        } else {
+                            setConfigUpdateStatus("成功 " + configUpdateTime());
+                        }
                         return;
                     }
                     parseJson(apiUrl, json);
                     synchronized (configUpdateLock) {
                         shownConfigBody = json;
-                        pendingConfigBody = null;
-                        pendingConfigUrl = null;
+                        shownConfigUrl = apiUrl;
                     }
                     LOG.i("echo-config-network url=" + apiUrl + " sites=" + sourceBeanList.size());
                     setConfigUpdateStatus("成功 " + configUpdateTime());
@@ -417,51 +417,20 @@ public class ApiConfig {
     }
 
     /**
-     * 用户离开首页再回来时，如果后台有一份还没换上的配置，解析它并清掉待换标记。
+     * 这次进程已经解析过同一订阅时，界面重建继续用内存里的配置。
+     * 不读磁盘上刚写下的新文件，避免这次使用中途把站点和爬虫换掉。
      *
-     * @return 已经换上新配置
+     * @return 已经沿用当前配置并回调成功
      */
-    public boolean applyPendingConfig() {
-        String body;
-        String url;
+    private boolean reuseRunningConfig(String apiUrl, LoadConfigCallback callback) {
         synchronized (configUpdateLock) {
-            if (TextUtils.isEmpty(pendingConfigBody) || pendingConfigUrl == null) {
+            if (TextUtils.isEmpty(shownConfigBody) || apiUrl == null || !apiUrl.equals(shownConfigUrl)) {
                 return false;
             }
-            url = Hawk.get(HawkConfig.API_URL, "");
-            if (!pendingConfigUrl.equals(url)) {
-                pendingConfigBody = null;
-                pendingConfigUrl = null;
-                return false;
-            }
-            body = pendingConfigBody;
-            pendingConfigBody = null;
-            pendingConfigUrl = null;
         }
-        try {
-            parseJson(url, body);
-        } catch (Throwable th) {
-            LOG.e("echo-config-apply: " + url + " " + th.getMessage());
-            return false;
-        }
-        synchronized (configUpdateLock) {
-            shownConfigBody = body;
-        }
-        LOG.i("echo-config-apply url=" + url + " sites=" + sourceBeanList.size());
+        LOG.i("echo-config-reuse url=" + apiUrl);
+        callback.success();
         return true;
-    }
-
-    /**
-     * 是否有一份已写入缓存、但当前界面还在用旧配置的更新。
-     */
-    public boolean hasPendingConfig() {
-        synchronized (configUpdateLock) {
-            if (TextUtils.isEmpty(pendingConfigBody) || pendingConfigUrl == null) {
-                return false;
-            }
-            String url = Hawk.get(HawkConfig.API_URL, "");
-            return pendingConfigUrl.equals(url);
-        }
     }
 
     /** 设置页展示的配置更新状态。还没有结果时给出占位文案。 */
