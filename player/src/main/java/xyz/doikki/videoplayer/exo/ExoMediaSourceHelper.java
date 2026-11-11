@@ -3,6 +3,7 @@ package xyz.doikki.videoplayer.exo;
 import android.content.Context;
 import android.net.Uri;
 import android.text.TextUtils;
+import android.util.Log;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.MediaItem;
@@ -25,8 +26,12 @@ import java.util.Map;
 
 import okhttp3.OkHttpClient;
 
+/**
+ * 按地址创建 Exo 媒体源。点播缓存打开时，http 片段写入同一块磁盘缓存。
+ */
 public final class ExoMediaSourceHelper {
     public static final String HEADER_FORMAT = "TVBox-Format";
+    private static final String TAG = "Tvbox-runtime";
 
     private static ExoMediaSourceHelper sInstance;
 
@@ -34,6 +39,12 @@ public final class ExoMediaSourceHelper {
     private OkHttpDataSource.Factory mHttpDataSourceFactory;
     private Cache mCache;
     private OkHttpClient mClient;
+    /** 当前这次播放要不要写磁盘缓存。直播由调用方关掉。 */
+    private boolean playbackCacheEnabled;
+    /** 设置里的缓存上限。和已创建缓存不一致时，下次开播重建。 */
+    private long cacheMaxBytes = 512L * 1024 * 1024;
+    /** 当前这块缓存实际使用的上限。 */
+    private long cacheBuiltBytes;
 
     private ExoMediaSourceHelper(Context context) {
         mAppContext = context.getApplicationContext();
@@ -84,7 +95,7 @@ public final class ExoMediaSourceHelper {
             return new RtspMediaSource.Factory().createMediaSource(MediaItem.fromUri(contentUri));
         }
         DataSource.Factory factory;
-        if (isCache) {
+        if ((isCache || playbackCacheEnabled) && isNetworkUrl(uri)) {
             factory = getCacheDataSourceFactory();
         } else {
             factory = getDataSourceFactory();
@@ -170,9 +181,38 @@ public final class ExoMediaSourceHelper {
                 || path.endsWith(".amr");
     }
 
+    /**
+     * 点播开始前设置这次是否缓存，以及上限。上限变了不立刻拆掉正在用的缓存，下次创建媒体源时再建。
+     *
+     * @param enabled 点播缓存开关。直播传 false
+     * @param maxBytes 上限字节数，小于等于 0 时用 512MB
+     */
+    public void setPlaybackCache(boolean enabled, long maxBytes) {
+        playbackCacheEnabled = enabled;
+        cacheMaxBytes = maxBytes > 0 ? maxBytes : 512L * 1024 * 1024;
+    }
+
+    /**
+     * @param uri 播放地址
+     * @return http 和 https 才进磁盘缓存，本地文件不重复包一层
+     */
+    private boolean isNetworkUrl(String uri) {
+        if (TextUtils.isEmpty(uri)) {
+            return false;
+        }
+        String lower = uri.toLowerCase();
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
     private DataSource.Factory getCacheDataSourceFactory() {
+        try {
+            ensureCache();
+        } catch (RuntimeException ex) {
+            Log.e(TAG, "echo-exo-cache-open: " + ex.getMessage());
+            return getDataSourceFactory();
+        }
         if (mCache == null) {
-            mCache = newCache();
+            return getDataSourceFactory();
         }
         return new CacheDataSource.Factory()
                 .setCache(mCache)
@@ -180,10 +220,42 @@ public final class ExoMediaSourceHelper {
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
     }
 
-    private Cache newCache() {
+    /**
+     * 同一目录只能有一块缓存。上限变了先释放旧的，再建新的。
+     */
+    private void ensureCache() {
+        long desired = cacheMaxBytes > 0 ? cacheMaxBytes : 512L * 1024 * 1024;
+        if (mCache != null && cacheBuiltBytes == desired) {
+            return;
+        }
+        releaseCache();
+        mCache = newCache(desired);
+        cacheBuiltBytes = desired;
+        Log.i(TAG, "echo-exo-cache-ready bytes=" + desired);
+    }
+
+    private void releaseCache() {
+        Cache cache = mCache;
+        mCache = null;
+        cacheBuiltBytes = 0;
+        if (cache == null) {
+            return;
+        }
+        try {
+            cache.release();
+        } catch (RuntimeException ex) {
+            Log.e(TAG, "echo-exo-cache-release: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * @param maxBytes 淘汰上限
+     * @return 新的磁盘缓存
+     */
+    private Cache newCache(long maxBytes) {
         return new SimpleCache(
-                new File(externalCacheDir(), "exo-video-cache"),//缓存目录
-                new LeastRecentlyUsedCacheEvictor(512 * 1024 * 1024),//缓存大小，默认512M，使用LRU算法实现
+                new File(externalCacheDir(), "exo-video-cache"),
+                new LeastRecentlyUsedCacheEvictor(maxBytes),
                 new ExoDatabaseProvider(mAppContext));
     }
 

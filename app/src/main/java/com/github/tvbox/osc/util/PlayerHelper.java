@@ -298,4 +298,42 @@ public class PlayerHelper {
             return bitSpeed > 0 ? bitSpeed + "bps" : (show ? "0bps" : "");
         }
     }
+
+    /** 设置里可选的 Exo 缓存上限，单位 MB。 */
+    public static int[] exoCacheSizeChoices() {
+        return new int[] {512, 1024, 2048, 4096};
+    }
+
+    /**
+     * 读取当前 Exo 缓存上限。非法值退回 512MB。
+     *
+     * @return 512、1024、2048 或 4096
+     */
+    public static int exoCacheSizeMb() {
+        int size = Hawk.get(HawkConfig.EXO_CACHE_SIZE_MB, HawkConfig.DEFAULT_EXO_CACHE_SIZE_MB);
+        for (int choice : exoCacheSizeChoices()) {
+            if (size == choice) {
+                return size;
+            }
+        }
+        return HawkConfig.DEFAULT_EXO_CACHE_SIZE_MB;
+    }
+
+    /**
+     * @param sizeMb 缓存上限，单位 MB
+     * @return 设置项上显示的文字
+     */
+    public static String exoCacheSizeName(int sizeMb) {
+        if (sizeMb % 1024 == 0 && sizeMb >= 1024) {
+            return (sizeMb / 1024) + "GB";
+        }
+        return sizeMb + "MB";
+    }
+
+    /**
+     * @return 交给 Exo 缓存淘汰器的字节数
+     */
+    public static long exoCacheSizeBytes() {
+        return exoCacheSizeMb() * 1024L * 1024L;
+    }
 }

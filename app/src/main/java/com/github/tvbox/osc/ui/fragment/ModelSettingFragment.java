@@ -97,6 +97,10 @@ public class ModelSettingFragment extends BaseLazyFragment {
     private TextView tvAutoSwitchLineText;
     private TextView tvRecStyleText;
     private TextView tvIjkCachePlay;
+    /** Exo 点播磁盘缓存开关的当前文字。 */
+    private TextView tvExoCachePlay;
+    /** Exo 缓存上限的当前文字。 */
+    private TextView tvExoCacheSize;
     private TextView tvHomeDefaultShow;
     private ApiDialog apiDialog;
     private boolean selectLocalLive;
@@ -150,6 +154,8 @@ public class ModelSettingFragment extends BaseLazyFragment {
         tvHistoryMerge = findViewById(R.id.tvHistoryMerge);
         tvSearchView = findViewById(R.id.tvSearchView);
         tvIjkCachePlay = findViewById(R.id.tvIjkCachePlay);
+        tvExoCachePlay = findViewById(R.id.tvExoCachePlay);
+        tvExoCacheSize = findViewById(R.id.tvExoCacheSize);
         tvMediaCodec.setText(Hawk.get(HawkConfig.IJK_CODEC, "硬解码"));
         tvDebugOpen.setText(Hawk.get(HawkConfig.DEBUG_OPEN, false) ? "已打开" : "已关闭");
         tvParseWebView.setText(Hawk.get(HawkConfig.PARSE_WEBVIEW, true) ? "系统自带" : "XWalkView");
@@ -166,6 +172,12 @@ public class ModelSettingFragment extends BaseLazyFragment {
         tvPlay.setText(PlayerHelper.getPlayerName(Hawk.get(HawkConfig.PLAY_TYPE, 2)));
         tvRender.setText(PlayerHelper.getRenderName(Hawk.get(HawkConfig.PLAY_RENDER, 0)));
         tvIjkCachePlay.setText(Hawk.get(HawkConfig.IJK_CACHE_PLAY, false) ? "开启" : "关闭");
+        if (tvExoCachePlay != null) {
+            tvExoCachePlay.setText(Hawk.get(HawkConfig.EXO_CACHE_PLAY, false) ? "开启" : "关闭");
+        }
+        if (tvExoCacheSize != null) {
+            tvExoCacheSize.setText(PlayerHelper.exoCacheSizeName(PlayerHelper.exoCacheSizeMb()));
+        }
         tvHomeDefaultShow = findViewById(R.id.tvHomeText);
         tvHomeDefaultShow.setText(Hawk.get(HawkConfig.DEFAULT_LOAD_LIVE, false) ? "直播" : "点播");
         findViewById(R.id.llDebug).setOnClickListener(new View.OnClickListener() {
@@ -808,6 +820,24 @@ public class ModelSettingFragment extends BaseLazyFragment {
             }
         });
 
+        View exoCachePlay = findViewById(R.id.llExoCachePlay);
+        if (exoCachePlay != null) {
+            exoCachePlay.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    onClickExoCachePlay(v);
+                }
+            });
+        }
+        View exoCacheSize = findViewById(R.id.llExoCacheSize);
+        if (exoCacheSize != null) {
+            exoCacheSize.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    onClickExoCacheSize(v);
+                }
+            });
+        }
         findViewById(R.id.llIjkCachePlay).setOnClickListener((view -> onClickIjkCachePlay(view)));
         findViewById(R.id.llClearCache).setOnClickListener((view -> onClickClearCache(view)));
     }
@@ -904,6 +934,69 @@ public class ModelSettingFragment extends BaseLazyFragment {
             startActivity(intent);
             System.exit(0);
         }
+    }
+
+    /**
+     * 切换 Exo 点播磁盘缓存。下次播放生效，直播不使用。
+     *
+     * @param view 被点击的设置行
+     */
+    private void onClickExoCachePlay(View view) {
+        FastClickCheckUtil.check(view);
+        boolean enabled = !Hawk.get(HawkConfig.EXO_CACHE_PLAY, false);
+        Hawk.put(HawkConfig.EXO_CACHE_PLAY, enabled);
+        if (tvExoCachePlay != null) {
+            tvExoCachePlay.setText(enabled ? "开启" : "关闭");
+        }
+    }
+
+    /**
+     * 选择 Exo 缓存上限。正在播放的片子继续用旧上限，下一次开播按新值重建。
+     *
+     * @param view 被点击的设置行
+     */
+    private void onClickExoCacheSize(View view) {
+        FastClickCheckUtil.check(view);
+        int[] choices = PlayerHelper.exoCacheSizeChoices();
+        int current = PlayerHelper.exoCacheSizeMb();
+        ArrayList<Integer> types = new ArrayList<>();
+        int defaultPos = 0;
+        for (int i = 0; i < choices.length; i++) {
+            types.add(choices[i]);
+            if (choices[i] == current) {
+                defaultPos = i;
+            }
+        }
+        SelectDialog<Integer> dialog = new SelectDialog<>(mActivity);
+        dialog.setTip("Exo缓存大小");
+        dialog.setAdapter(new SelectDialogAdapter.SelectDialogInterface<Integer>() {
+            @Override
+            public void click(Integer value, int pos) {
+                if (value == null) {
+                    return;
+                }
+                Hawk.put(HawkConfig.EXO_CACHE_SIZE_MB, value);
+                if (tvExoCacheSize != null) {
+                    tvExoCacheSize.setText(PlayerHelper.exoCacheSizeName(value));
+                }
+            }
+
+            @Override
+            public String getDisplay(Integer val) {
+                return PlayerHelper.exoCacheSizeName(val == null ? HawkConfig.DEFAULT_EXO_CACHE_SIZE_MB : val);
+            }
+        }, new DiffUtil.ItemCallback<Integer>() {
+            @Override
+            public boolean areItemsTheSame(@NonNull @NotNull Integer oldItem, @NonNull @NotNull Integer newItem) {
+                return oldItem.intValue() == newItem.intValue();
+            }
+
+            @Override
+            public boolean areContentsTheSame(@NonNull @NotNull Integer oldItem, @NonNull @NotNull Integer newItem) {
+                return oldItem.intValue() == newItem.intValue();
+            }
+        }, types, defaultPos);
+        dialog.show();
     }
 
     private void onClickIjkCachePlay(View v) {

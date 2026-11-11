@@ -56,6 +56,12 @@ public class HawkConfig {
     public static final String NOW_DATE = "now_date"; //当前日期
     public static final String REMOTE_TVBOX = "remote_tvbox_host";
     public static final String IJK_CACHE_PLAY = "ijk_cache_play";
+    /** Exo 点播是否把已下载片段写入磁盘，供回拉和再次播放命中。直播不使用。 */
+    public static final String EXO_CACHE_PLAY = "exo_cache_play";
+    /** Exo 磁盘缓存上限，单位 MB。只允许 512、1024、2048、4096。 */
+    public static final String EXO_CACHE_SIZE_MB = "exo_cache_size_mb";
+    /** 未改过容量时使用 512MB。 */
+    public static final int DEFAULT_EXO_CACHE_SIZE_MB = 512;
     public static final String PLAYER_IS_LIVE = "player_is_live";
     public static final String DOH_JSON = "doh_json";
     public static final String LIVE_GROUP_INDEX = "live_group_index";

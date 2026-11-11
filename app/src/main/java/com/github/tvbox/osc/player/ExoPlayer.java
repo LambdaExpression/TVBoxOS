@@ -6,7 +6,10 @@ import android.os.Looper;
 import android.util.Pair;
 
 import com.github.tvbox.osc.util.AudioTrackMemory;
+import com.github.tvbox.osc.util.HawkConfig;
 import com.github.tvbox.osc.util.LOG;
+import com.github.tvbox.osc.util.PlayerHelper;
+import com.orhanobut.hawk.Hawk;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.DefaultLoadControl;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
@@ -148,7 +151,21 @@ public class ExoPlayer extends ExoMediaPlayer {
         resetBufferingRecovery();
         defaultSubtitleTrackSelected = false;
         defaultSubtitleTrackSelectionClosed = false;
+        applyPlaybackCache();
         super.setDataSource(path, headers);
+    }
+
+    /**
+     * 直播不写磁盘缓存。点播是否缓存、上限多少，都读设置，下次开播生效。
+     */
+    private void applyPlaybackCache() {
+        if (mMediaSourceHelper == null) {
+            return;
+        }
+        boolean live = Hawk.get(HawkConfig.PLAYER_IS_LIVE, false);
+        boolean enabled = !live && Hawk.get(HawkConfig.EXO_CACHE_PLAY, false);
+        mMediaSourceHelper.setPlaybackCache(enabled, PlayerHelper.exoCacheSizeBytes());
+        LOG.i("echo-exo-cache enabled=" + enabled + " sizeMb=" + PlayerHelper.exoCacheSizeMb());
     }
 
     private boolean shouldCheckBuffering() {
