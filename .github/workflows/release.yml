@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      # 只改流水线时不重复打包。下次有功能提交仍会发布。
+      - ".github/**"
   workflow_dispatch:
 
 permissions:
