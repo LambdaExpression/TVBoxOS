@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      # 只改流水线时不重复打包。下次有功能提交仍会发布。
+      - ".github/**"
   workflow_dispatch:
 
 permissions:
@@ -15,6 +18,9 @@ jobs:
     steps:
       - name: 取出当前仓库
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: 安装 Python 3.8
         uses: actions/setup-python@v5
@@ -69,12 +75,55 @@ jobs:
         run: |
           tag="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)-${GITHUB_SHA::7}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          {
-            echo "提交：${GITHUB_SHA}"
-            echo
-            echo "说明："
-            git log -1 --pretty=%B
-          } > release-notes.txt
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          describe = subprocess.run(
+              ["git", "describe", "--tags", "--abbrev=0", "HEAD^"],
+              capture_output=True,
+              text=True,
+          )
+          if describe.returncode == 0 and describe.stdout.strip():
+              revision = [f"{describe.stdout.strip()}..HEAD"]
+          else:
+              revision = ["-1"]
+          log = subprocess.check_output(
+              ["git", "log", "--no-merges", "--reverse", "--pretty=format:%s%x1f%b%x1e", *revision],
+              text=True,
+          )
+          entries = []
+          for raw in log.split("\x1e"):
+              raw = raw.strip()
+              if not raw:
+                  continue
+              subject, _, body = raw.partition("\x1f")
+              subject = subject.strip()
+              body_lines = []
+              for line in body.splitlines():
+                  line = line.rstrip()
+                  if not line.strip():
+                      continue
+                  if line.startswith(("Co-authored-by:", "Signed-off-by:", "Change-Id:")):
+                      continue
+                  body_lines.append(line)
+              if subject:
+                  entries.append((subject, body_lines))
+          if not entries:
+              print("更新内容是空的，停止发布", file=sys.stderr)
+              sys.exit(1)
+          lines = ["更新内容", ""]
+          for subject, body_lines in entries:
+              lines.append(f"- {subject}")
+              for line in body_lines:
+                  lines.append(f"  {line}")
+              if body_lines:
+                  lines.append("")
+          text = "\n".join(lines).rstrip() + "\n"
+          with open("release-notes.txt", "w", encoding="utf-8") as notes:
+              notes.write(text)
+          print(text)
+          PY
 
       - name: 打包六个口味
         env:
