@@ -429,7 +429,6 @@ public class HomeActivity extends BaseActivity {
 
     private boolean dataInitOk = false;
     private boolean jarInitOk = false;
-    private boolean searchSpiderWarmStarted = false;
     /** 配置在显示缓存后又被刷新时递增，丢掉过期的 initData。 */
     private int configEpoch = 0;
     /** 当前已经拿来加载爬虫包的地址。配置刷新后地址变了才重新加载。 */
@@ -447,8 +446,6 @@ public class HomeActivity extends BaseActivity {
             if (!useCacheConfig && Hawk.get(HawkConfig.DEFAULT_LOAD_LIVE, false)) {
                 jumpActivity(LivePlayActivity.class);
             }
-            //爬虫预热 仅首次加载
-            if(!useCacheConfig)warmSearchSpidersOnce();
             return;
         }
         tvNameAnimation();
@@ -633,12 +630,6 @@ public class HomeActivity extends BaseActivity {
                 });
             }
         }, this);
-    }
-
-    private void warmSearchSpidersOnce() {
-        if (searchSpiderWarmStarted) return;
-        searchSpiderWarmStarted = true;
-        ApiConfig.get().warmSearchSpiders();
     }
 
     private void loadHomeSort(boolean keepCurrentContent) {

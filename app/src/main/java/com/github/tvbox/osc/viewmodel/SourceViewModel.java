@@ -1,5 +1,7 @@
 package com.github.tvbox.osc.viewmodel;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.text.TextUtils;
 
 import android.util.Base64;
@@ -21,6 +23,8 @@ import com.github.tvbox.osc.bean.AbsXml;
 import com.github.tvbox.osc.bean.Movie;
 import com.github.tvbox.osc.bean.MovieSort;
 import com.github.tvbox.osc.bean.SourceBean;
+import com.github.tvbox.osc.cache.VodRecord;
+import com.github.tvbox.osc.data.AppDataManager;
 import com.github.tvbox.osc.event.RefreshEvent;
 import com.github.tvbox.osc.player.thirdparty.RemoteTVBox;
 import com.github.tvbox.osc.util.DefaultConfig;
@@ -487,6 +491,46 @@ public class SourceViewModel extends ViewModel {
         return lower.contains("douban") || value.contains("\u8c46\u74e3");
     }
 
+    private static void syncDoubanHistory(SourceBean sourceBean, String categoryId, int page) {
+        if (page != 1 || !"guess_you_like".equals(categoryId) || !isDoubanSource(sourceBean)) return;
+        try {
+            App app = App.getInstance();
+            SharedPreferences preferences = app.getSharedPreferences(app.getPackageName() + "_preferences", Context.MODE_PRIVATE);
+            String previous = preferences.getString("historyvodname", "");
+            List<String> names = new ArrayList<>();
+            // JAR 按每页一个历史片名生成推荐，第一页同步后保持分页顺序。
+            for (VodRecord record : AppDataManager.get().getVodRecordDao().getAll(Integer.MAX_VALUE)) {
+                if (names.size() >= 10) break;
+                if (TextUtils.isEmpty(record.dataJson)) continue;
+                try {
+                    String name = new JSONObject(record.dataJson).optString("name", "").trim();
+                    if (!TextUtils.isEmpty(name) && !names.contains(name)) names.add(name);
+                } catch (org.json.JSONException ex) {
+                    LOG.e("echo-douban-history-skip: " + ex.getMessage());
+                }
+            }
+            // 保留 JAR 自己记录的片名，本机没有播放记录时也可继续使用。
+            if (!TextUtils.isEmpty(previous)) {
+                try {
+                    JSONArray history = new JSONArray(previous);
+                    for (int i = 0; i < history.length() && names.size() < 10; i++) {
+                        String name = history.optString(i, "").trim();
+                        if (!TextUtils.isEmpty(name) && !names.contains(name)) names.add(name);
+                    }
+                } catch (org.json.JSONException ex) {
+                    LOG.e("echo-douban-history-parse: " + ex.getMessage());
+                }
+            }
+            if (!names.isEmpty()) {
+                String history = new JSONArray(names).toString();
+                if (!history.equals(previous)) preferences.edit().putString("historyvodname", history).apply();
+            }
+            LOG.i("echo-douban-history--count=" + names.size());
+        } catch (Exception e) {
+            LOG.e("echo-douban-history-error--" + e.getMessage());
+        }
+    }
+
 
     // homeContent
     public void getSort(final String sourceKey) {
@@ -773,6 +817,7 @@ public class SourceViewModel extends ViewModel {
                                 return "";
                             }
                             Spider sp = ApiConfig.get().getCSP(homeSourceBean);
+                            syncDoubanHistory(homeSourceBean, sortData.id, page);
                             return sp.categoryContent(sortData.id, page + "", true, filters);
                         }
                     }, new SpiderJob.Callback() {
@@ -949,6 +994,7 @@ public class SourceViewModel extends ViewModel {
                                 return "";
                             }
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
+                            syncDoubanHistory(sourceBean, id, 1);
                             return sp.categoryContent(id, "1", true, new HashMap<String, String>());
                         }
                     }, new SpiderJob.Callback() {

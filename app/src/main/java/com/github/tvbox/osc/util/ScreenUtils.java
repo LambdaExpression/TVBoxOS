@@ -27,13 +27,26 @@ public class ScreenUtils {
     }
 
     private static boolean checkIsPhone(Context context) {
-        TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-        return telephonyManager.getPhoneType() != TelephonyManager.PHONE_TYPE_NONE;
+        Object service = context.getSystemService(Context.TELEPHONY_SERVICE);
+        if (!(service instanceof TelephonyManager)) {
+            return false;
+        }
+        return ((TelephonyManager) service).getPhoneType() != TelephonyManager.PHONE_TYPE_NONE;
     }
 
+    /**
+     * 电视或盒子才显示局域网传输。系统服务拿不到时按非电视处理，避免首页直接崩溃。
+     */
     public static boolean isTv(Context context) {
-        UiModeManager uiModeManager = (UiModeManager) context.getSystemService(UI_MODE_SERVICE);
-        return uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION || (checkScreenLayoutIsTv(context) && !checkIsPhone(context));
+        if (context == null) {
+            return false;
+        }
+        Object service = context.getSystemService(UI_MODE_SERVICE);
+        if (service instanceof UiModeManager
+                && ((UiModeManager) service).getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
+            return true;
+        }
+        return checkScreenLayoutIsTv(context) && !checkIsPhone(context);
     }
 
 
