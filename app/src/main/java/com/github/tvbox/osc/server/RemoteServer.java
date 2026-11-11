@@ -149,6 +149,13 @@ public class RemoteServer extends NanoHTTPD {
             if (fileName.indexOf('?') >= 0) {
                 fileName = fileName.substring(0, fileName.indexOf('?'));
             }
+            if ("/log".equals(fileName) && session.getMethod() == Method.GET) {
+                return runtimeLogResponse();
+            }
+            if ("/log/clear".equals(fileName) && session.getMethod() == Method.POST) {
+                LOG.clear();
+                return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "OK");
+            }
             if (session.getMethod() == Method.GET) {
                 if (isProxyRequest(fileName, session.getParms())) {
                     return handleProxy(session);
@@ -396,6 +403,19 @@ public class RemoteServer extends NanoHTTPD {
             }
         }
         return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", array.toString());
+    }
+
+    /**
+     * 把设置页同一份运行日志给局域网页面。只读已有记录，不额外打印配置或口令。
+     */
+    private Response runtimeLogResponse() {
+        String text = LOG.getText();
+        if (text == null) {
+            text = "";
+        }
+        Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", text);
+        response.addHeader("Cache-Control", "no-store");
+        return response;
     }
 
     private boolean isProxyRequest(String fileName, Map<String, String> params) {

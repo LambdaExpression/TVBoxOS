@@ -254,6 +254,32 @@ function doDelFile(yes) {
     }
 }
 
+function loadLog() {
+    $.ajax({
+        url: '/log',
+        method: 'GET',
+        cache: false,
+        dataType: 'text',
+        success: function (data) {
+            $('#runtime_log').text(data && data.length ? data : '暂无日志');
+        },
+        error: function () {
+            $('#runtime_log').text('读取日志失败');
+        }
+    });
+}
+
+function clearLog() {
+    if (!window.confirm('清空电视上的运行日志？')) {
+        return;
+    }
+    $.post('/log/clear', function () {
+        $('#runtime_log').text('暂无日志');
+    }).fail(function () {
+        $('#runtime_log').text('清空失败');
+    });
+}
+
 function showPanel(id) {
     let tab = $('#tab' + id)[0];
     $(tab).attr('aria-selected', 'true').addClass('weui-bar__item_on');
@@ -261,6 +287,9 @@ function showPanel(id) {
     var panelId = '#' + $(tab).attr('aria-controls');
     if (id === 3 && current_remote.length === 0) {
         listFile('')
+    }
+    if (id === 4) {
+        loadLog();
     }
     $(panelId).css('display', 'block');
     $(panelId).siblings('.weui-tab__panel').css('display', 'none');

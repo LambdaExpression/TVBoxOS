@@ -120,6 +120,21 @@
 						</div>
 					</div>
 				</div>
+				<div id="panel4" role="tabpanel" aria-labelledby="tab4" class="weui-tab__panel" style="display: none;">
+					<div class="weui-form">
+						<div class="weui-form__text-area">
+							<h2 class="weui-form__title">TVBox . 日志</h2>
+						</div>
+						<div class="weui-form__control-area" style="text-align: center; margin-bottom: 10px !important;">
+							<a href="javascript:void(0)" role="button" class="weui-btn weui-btn_mini weui-btn_default"
+								onclick="loadLog(); return false;">刷新</a>&nbsp;
+							<a href="javascript:void(0)" role="button" class="weui-btn weui-btn_mini weui-btn_warn"
+								onclick="clearLog(); return false;">清空</a>
+						</div>
+						<pre id="runtime_log"
+							style="white-space: pre-wrap; word-break: break-all; text-align: left; max-height: 60vh; overflow: auto; margin: 0 16px 24px; padding: 12px; background: #111; color: #ddd; font-size: 12px;">打开后自动加载</pre>
+					</div>
+				</div>
 				<div role="tablist" class="weui-tabbar">
 					<div id="tab1" role="tab" aria-labelledby="t1_title" aria-selected="true" aria-controls="panel1"
 						class="weui-tabbar__item weui-bar__item_on">
@@ -141,6 +156,13 @@
 							src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAA3NCSVQICAjb4U/gAAAACXBIWXMAAAC5AAAAuQHip0HoAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAANtQTFRF////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhQHXOQAAAEh0Uk5TAAECBAUGCQoNDxITGiAhKC4xMjM0Nzg8P0BDT1dmbHR4fX+MlpedoKOkp6issri5vL2/zs/S19zd4OHi5OXp7e/x8/f6+/z+bkNkuAAAATRJREFUOMuNk2kzAmAUhR8iUSHSokWobCFLtFBI9fz/X+RDzdQY9brfzl3mbufAghVfVF+KLLHoh6p+RJckHGkxmSzq0ZKEjF2ArplfgcPjHYBC2w5Ax3YBYOf4cBovjfw82dy71/ElwOVY7/c2Tz4dlQB2h6q9b3uVxLQiUen53VMd7gINWwflgT7G503jjzoop55sQN5JBuK12sbiWBu1WhzSE/PcectSu/WOjs31uWcrm92ao/WmHc70OTtzbNfHOq5vz2D2Wc9Yq3zpBQCxV+339TUGwIV+VdaAxIMtAKq+5SD3bhWAlg+zvc+9BogMzQHkHEYAbjyf9bryFGDf/hT33Qc49eq/CaEWgSGDawYPFTx18Fl5J+mV76bhU2oVYcKUC5I2TPuwcP4tvaB4/5T/D6drVhrBHvH6AAAAAElFTkSuQmCC"
 							alt="" class="weui-tabbar__icon">
 						<p id="t3_title" aria-hidden="true" class="weui-tabbar__label">配置</p>
+					</div>
+					<div id="tab4" role="tab" aria-labelledby="t4_title" aria-selected="false" aria-controls="panel4"
+						class="weui-tabbar__item">
+						<img style="width: 20px; height: 20px; margin: 5px 0 5px 0;"
+							src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h9l5 5v15H6zM14 3.5V8h4.5zM8 12h8v1.5H8zm0 3h8v1.5H8zm0 3h5v1.5H8z'/%3E%3C/svg%3E"
+							alt="" class="weui-tabbar__icon">
+						<p id="t4_title" aria-hidden="true" class="weui-tabbar__label">日志</p>
 					</div>
 				</div>
 			</div>
