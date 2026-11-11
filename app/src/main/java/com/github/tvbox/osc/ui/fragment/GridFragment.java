@@ -10,7 +10,6 @@ import android.view.animation.BounceInterpolator;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -42,6 +41,7 @@ import com.owen.tvrecyclerview.widget.V7GridLayoutManager;
 import com.owen.tvrecyclerview.widget.V7LinearLayoutManager;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Stack;
 import android.view.ViewGroup;
@@ -80,6 +80,8 @@ public class GridFragment extends BaseLazyFragment {
 
     private static class GridInfo{
         public String sortID="";
+        /** 进入文件夹前这一层已经选中的筛选，返回时原样放回去。 */
+        public HashMap<String, String> filterSelect = new HashMap<>();
         public TvRecyclerView mGridView;
         public GridAdapter gridAdapter;
         public int page = 1;
@@ -127,6 +129,10 @@ public class GridFragment extends BaseLazyFragment {
             this.sortData.flag ="2"; // 修改sortData.flag
         }
         initView();
+        // 文件夹不是上一层分类。筛选留在被盖住的那一层，不跟着新 id 一起请求。
+        if (this.sortData.filterSelect != null) {
+            this.sortData.filterSelect.clear();
+        }
         this.sortData.id =id; // 修改sortData.id为新的ID
         initViewModel();
         initData();
@@ -143,6 +149,7 @@ public class GridFragment extends BaseLazyFragment {
         if(this.mGridView == null) return;
         GridInfo info = new GridInfo();
         info.sortID = this.sortData.id;
+        info.filterSelect = this.sortData.filterSelect == null ? new HashMap<String, String>() : new HashMap<>(this.sortData.filterSelect);
         info.mGridView = this.mGridView;
         info.gridAdapter = this.gridAdapter;
         info.page = this.page;
@@ -159,6 +166,14 @@ public class GridFragment extends BaseLazyFragment {
         ((ViewGroup) mGridView.getParent()).removeView(this.mGridView); // 重父窗口移除当前控件
         GridInfo info = mGrids.pop();// 还原上次保存的控件
         this.sortData.id = info.sortID;
+        if (this.sortData.filterSelect == null) {
+            this.sortData.filterSelect = new HashMap<>();
+        }
+        this.sortData.filterSelect.clear();
+        if (info.filterSelect != null) {
+            this.sortData.filterSelect.putAll(info.filterSelect);
+        }
+        toggleFilterColor();
         this.mGridView = info.mGridView;
         this.gridAdapter = info.gridAdapter;
         this.page = info.page;
@@ -480,7 +495,14 @@ public class GridFragment extends BaseLazyFragment {
     }
 
     public void showFilter() {
-        if (!sortData.filters.isEmpty() && gridFilterDialog == null) {
+        if (sortData == null || sortData.filters == null || sortData.filters.isEmpty()) {
+            return;
+        }
+        // 文件夹这一层没有自己的筛选，避免把上一层的年份、类型套到文件夹 id 上。
+        if (!mGrids.empty()) {
+            return;
+        }
+        if (gridFilterDialog == null) {
             gridFilterDialog = new GridFilterDialog(mContext);
 //            gridFilterDialog.setData(sortData);
 //            gridFilterDialog.setOnDismiss(new GridFilterDialog.Callback() {
@@ -500,8 +522,6 @@ public class GridFragment extends BaseLazyFragment {
         Context context = getContext();
         LayoutInflater inflater = LayoutInflater.from(context);
         assert context != null;
-        final int defaultColor = ContextCompat.getColor(context, R.color.color_FFFFFF);
-        final int selectedColor = ContextCompat.getColor(context, R.color.color_02F8E1);
         // 遍历过滤条件数据
         for (MovieSort.SortFilter filter : sortData.filters) {
             View line = inflater.inflate(R.layout.item_grid_filter, gridFilterDialog.filterRoot, false);
@@ -513,47 +533,28 @@ public class GridFragment extends BaseLazyFragment {
             GridFilterKVAdapter adapter = new GridFilterKVAdapter();
             gridView.setAdapter(adapter);
             final String key = filter.key;
-            final ArrayList<String> values = new ArrayList<>(filter.values.keySet());
-            final ArrayList<String> keys = new ArrayList<>(filter.values.values());
+            final List<MovieSort.FilterOption> options = filter.options();
+            adapter.setSelectedValue(sortData.filterSelect == null ? null : sortData.filterSelect.get(key));
             adapter.setOnItemClickListener(new BaseQuickAdapter.OnItemClickListener() {
-                // 用于记录上一次选中的 view
-                View previousSelectedView = null;
                 @Override
                 public void onItemClick(BaseQuickAdapter adapter, View view, int position) {
-                    String currentSelection = sortData.filterSelect.get(key);
-                    String newSelection = keys.get(position);
-                    if (currentSelection == null || !currentSelection.equals(newSelection)) {
-                        // 更新选中状态
-                        sortData.filterSelect.put(key, newSelection);
-                        updateViewStyle(view, selectedColor, true);
-                        if (previousSelectedView != null) {
-                            updateViewStyle(previousSelectedView, defaultColor, false);
-                        }
-                        previousSelectedView = view;
-                    } else {
-                        // 取消选中
-                        sortData.filterSelect.remove(key);
-                        if (previousSelectedView != null) {
-                            updateViewStyle(previousSelectedView, defaultColor, false);
-                        }
-                        previousSelectedView = null;
+                    if (position < 0 || position >= options.size()) {
+                        return;
                     }
+                    MovieSort.FilterOption option = options.get(position);
+                    sortData.selectFilter(key, option == null ? "" : option.value);
+                    ((GridFilterKVAdapter) adapter).setSelectedValue(sortData.filterSelect == null ? null : sortData.filterSelect.get(key));
+                    adapter.notifyDataSetChanged();
                     forceRefresh();
                 }
-                private void updateViewStyle(View view, int color, boolean isBold) {
-                    TextView valueTv = view.findViewById(R.id.filterValue);
-                    valueTv.getPaint().setFakeBoldText(isBold);
-                    valueTv.setTextColor(color);
-                }
             });
-            adapter.setNewData(values);
+            adapter.setNewData(options);
             gridFilterDialog.filterRoot.addView(line);
         }
     }
 
     public void forceRefresh() {
         if (mGridView == null || gridAdapter == null || sourceViewModel == null) return;
-        if (isRequesting) return;
         page = 1;
         initData();
     }

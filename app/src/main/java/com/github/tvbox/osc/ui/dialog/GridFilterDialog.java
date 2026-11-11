@@ -60,39 +60,25 @@ public class GridFilterDialog extends BaseDialog {
             TvRecyclerView gridView = line.findViewById(R.id.mFilterKv);
             gridView.setHasFixedSize(true);
             gridView.setLayoutManager(new V7LinearLayoutManager(getContext(), 0, false));
-            GridFilterKVAdapter filterKVAdapter = new GridFilterKVAdapter();
+            final GridFilterKVAdapter filterKVAdapter = new GridFilterKVAdapter();
             gridView.setAdapter(filterKVAdapter);
-            String key = filter.key;
-            ArrayList<String> values = new ArrayList<>(filter.values.keySet());
-            ArrayList<String> keys = new ArrayList<>(filter.values.values());
+            final String key = filter.key;
+            final java.util.List<MovieSort.FilterOption> options = filter.options();
+            filterKVAdapter.setSelectedValue(sortData.filterSelect == null ? null : sortData.filterSelect.get(key));
             filterKVAdapter.setOnItemClickListener(new BaseQuickAdapter.OnItemClickListener() {
-                View pre = null;
-
                 @Override
                 public void onItemClick(BaseQuickAdapter adapter, View view, int position) {
-                    selectChange = true;
-                    String filterSelect = sortData.filterSelect.get(key);
-                    if (filterSelect == null || !filterSelect.equals(keys.get(position))) {
-                        sortData.filterSelect.put(key, keys.get(position));
-                        if (pre != null) {
-                            TextView val = pre.findViewById(R.id.filterValue);
-                            val.getPaint().setFakeBoldText(false);
-                            val.setTextColor(getContext().getResources().getColor(R.color.color_FFFFFF));
-                        }
-                        TextView val = view.findViewById(R.id.filterValue);
-                        val.getPaint().setFakeBoldText(true);
-                        val.setTextColor(getContext().getResources().getColor(R.color.color_02F8E1));
-                        pre = view;
-                    } else {
-                        sortData.filterSelect.remove(key);
-                        TextView val = pre.findViewById(R.id.filterValue);
-                        val.getPaint().setFakeBoldText(false);
-                        val.setTextColor(getContext().getResources().getColor(R.color.color_FFFFFF));
-                        pre = null;
+                    if (position < 0 || position >= options.size()) {
+                        return;
                     }
+                    selectChange = true;
+                    MovieSort.FilterOption option = options.get(position);
+                    sortData.selectFilter(key, option == null ? "" : option.value);
+                    filterKVAdapter.setSelectedValue(sortData.filterSelect == null ? null : sortData.filterSelect.get(key));
+                    filterKVAdapter.notifyDataSetChanged();
                 }
             });
-            filterKVAdapter.setNewData(values);
+            filterKVAdapter.setNewData(options);
             filterRoot.addView(line);
         }
     }

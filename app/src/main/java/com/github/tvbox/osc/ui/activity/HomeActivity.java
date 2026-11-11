@@ -394,7 +394,22 @@ public class HomeActivity extends BaseActivity {
                 if (sort == null) {
                     continue;
                 }
-                builder.append(sort.id).append('\u0001').append(sort.name).append('\n');
+                builder.append(sort.id).append('\u0001').append(sort.name);
+                if (sort.filters != null) {
+                    for (MovieSort.SortFilter filter : sort.filters) {
+                        if (filter == null) {
+                            continue;
+                        }
+                        builder.append('\u0002').append(filter.key).append('=').append(filter.name);
+                        for (MovieSort.FilterOption option : filter.options()) {
+                            if (option == null) {
+                                continue;
+                            }
+                            builder.append('\u0002').append(option.name).append('>').append(option.value);
+                        }
+                    }
+                }
+                builder.append('\n');
             }
         }
         builder.append('|');

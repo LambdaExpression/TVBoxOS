@@ -752,8 +752,9 @@ public class SourceViewModel extends ViewModel {
             return;
         }
         int type = homeSourceBean.getType();
+        final int requestSeq = listRequestSeq.incrementAndGet();
+        final HashMap<String, String> filters = activeFilters(sortData);
         if (type == 3) {
-            final int requestSeq = listRequestSeq.incrementAndGet();
             cancelJob(listSpiderJob);
             final SpiderJob job = new SpiderJob();
             listSpiderJob = job;
@@ -772,7 +773,7 @@ public class SourceViewModel extends ViewModel {
                                 return "";
                             }
                             Spider sp = ApiConfig.get().getCSP(homeSourceBean);
-                            return sp.categoryContent(sortData.id, page + "", true, sortData.filterSelect);
+                            return sp.categoryContent(sortData.id, page + "", true, filters);
                         }
                     }, new SpiderJob.Callback() {
                         @Override
@@ -806,13 +807,14 @@ public class SourceViewModel extends ViewModel {
                 }
             });
         } else if (type == 0 || type == 1) {
+            OkGo.getInstance().cancelTag(homeSourceBean.getApi());
             OkGo.<String>get(homeSourceBean.getApi())
                     .tag(homeSourceBean.getApi())
                     .params("ac", type == 0 ? "videolist" : "detail")
                     .params("t", sortData.id)
                     .params("pg", page)
-                    .params(sortData.filterSelect)
-                    .params("f", (sortData.filterSelect == null || sortData.filterSelect.size() <= 0) ? "" : new JSONObject(sortData.filterSelect).toString())
+                    .params(filters)
+                    .params("f", filters.isEmpty() ? "" : new JSONObject(filters).toString())
                     .execute(new AbsCallback<String>() {
 
                         @Override
@@ -826,6 +828,9 @@ public class SourceViewModel extends ViewModel {
 
                         @Override
                         public void onSuccess(Response<String> response) {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
+                            }
                             if (type == 0) {
                                 String xml = response.body();
                                 xml(listResult, xml, homeSourceBean.getKey());
@@ -838,19 +843,25 @@ public class SourceViewModel extends ViewModel {
                         @Override
                         public void onError(Response<String> response) {
                             super.onError(response);
-                            listResult.postValue(null);
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
                         }
                     });
         }else if (type == 4) {
             runOffMain(new Runnable() {
                 @Override
                 public void run() {
+            if (requestSeq != listRequestSeq.get()) {
+                return;
+            }
+            OkGo.getInstance().cancelTag(homeSourceBean.getApi());
             String ext= "";
             String extend=homeSourceBean.getExt();
             extend=getFixUrl(extend);
-            if (sortData.filterSelect != null && sortData.filterSelect.size() > 0) {
+            if (!filters.isEmpty()) {
                 try {
-                    String selectExt = new JSONObject(sortData.filterSelect).toString();
+                    String selectExt = new JSONObject(filters).toString();
                     ext = Base64.encodeToString(selectExt.getBytes("UTF-8"), Base64.DEFAULT |  Base64.NO_WRAP);
                 } catch (UnsupportedEncodingException e) {
                     e.printStackTrace();
@@ -887,6 +898,9 @@ public class SourceViewModel extends ViewModel {
 
                         @Override
                         public void onSuccess(Response<String> response) {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
+                            }
                             String json = response.body();
 //                            LOG.i("echo-list: " + json);
                             json(listResult, json, homeSourceBean.getKey());
@@ -895,7 +909,9 @@ public class SourceViewModel extends ViewModel {
                         @Override
                         public void onError(Response<String> response) {
                             super.onError(response);
-                            listResult.postValue(null);
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
                         }
                     });
                 }
@@ -1986,22 +2002,144 @@ public class SourceViewModel extends ViewModel {
         }
     }
 
+    /**
+     * 请求里只带有值的筛选。空字符串是「全部」，传给爬虫会把结果筛空。
+     *
+     * @param sortData 当前分类，允许为空
+     * @return 新的 map，调用方可以继续改，不会动界面上的选中状态
+     */
+    private static HashMap<String, String> activeFilters(MovieSort.SortData sortData) {
+        HashMap<String, String> selected = new HashMap<>();
+        if (sortData == null || sortData.filterSelect == null) {
+            return selected;
+        }
+        for (Map.Entry<String, String> entry : sortData.filterSelect.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().length() == 0) {
+                continue;
+            }
+            if (entry.getValue() == null || entry.getValue().length() == 0) {
+                continue;
+            }
+            selected.put(entry.getKey(), entry.getValue());
+        }
+        return selected;
+    }
+
+    /**
+     * 把源里的 init 标成选中。只接受选项里确实存在的 v，避免默认值本身就是错的还照样拿去请求。
+     *
+     * @param sort 刚挂上筛选的分类
+     */
+    private static void applyFilterInit(MovieSort.SortData sort) {
+        if (sort == null || sort.filters == null) {
+            return;
+        }
+        if (sort.filterSelect == null) {
+            sort.filterSelect = new HashMap<>();
+        }
+        for (MovieSort.SortFilter filter : sort.filters) {
+            if (filter == null || filter.key == null || filter.key.length() == 0) {
+                continue;
+            }
+            if (filter.init == null || filter.init.length() == 0 || sort.filterSelect.containsKey(filter.key)) {
+                continue;
+            }
+            for (MovieSort.FilterOption option : filter.options()) {
+                if (option != null && filter.init.equals(option.value)) {
+                    sort.filterSelect.put(filter.key, filter.init);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * 解析一个筛选项。缺字段就跳过这一项，不把整个分类的筛选丢掉。
+     *
+     * @param obj filters 里的一项
+     * @return 没有 key 时返回 null
+     */
     private MovieSort.SortFilter getSortFilter(JsonObject obj) {
-        String key = obj.get("key").getAsString();
-        String name = obj.get("name").getAsString();
-        JsonArray kv = obj.getAsJsonArray("value");
-        LinkedHashMap<String, String> values = new LinkedHashMap<>();
-        for (JsonElement ele : kv) {
-            JsonObject ele_obj = ele.getAsJsonObject();
-            String values_key=ele_obj.has("n")?ele_obj.get("n").getAsString():"";
-            String values_value=ele_obj.has("v")?ele_obj.get("v").getAsString():"";
-            values.put(values_key, values_value);
+        if (obj == null || !obj.has("key") || obj.get("key").isJsonNull()) {
+            return null;
         }
         MovieSort.SortFilter filter = new MovieSort.SortFilter();
-        filter.key = key;
-        filter.name = name;
-        filter.values = values;
+        filter.key = obj.get("key").getAsString();
+        if (filter.key == null || filter.key.length() == 0) {
+            return null;
+        }
+        filter.name = obj.has("name") && !obj.get("name").isJsonNull() ? obj.get("name").getAsString() : filter.key;
+        if (obj.has("init") && !obj.get("init").isJsonNull()) {
+            filter.init = obj.get("init").getAsString();
+        }
+        if (!obj.has("value") || obj.get("value").isJsonNull()) {
+            return filter;
+        }
+        JsonElement value = obj.get("value");
+        if (value.isJsonArray()) {
+            for (JsonElement ele : value.getAsJsonArray()) {
+                addFilterOption(filter, ele);
+            }
+        } else if (value.isJsonObject()) {
+            for (Map.Entry<String, JsonElement> entry : value.getAsJsonObject().entrySet()) {
+                MovieSort.FilterOption option = new MovieSort.FilterOption();
+                option.name = entry.getKey();
+                JsonElement item = entry.getValue();
+                option.value = item != null && item.isJsonPrimitive() ? item.getAsString() : "";
+                addFilterOption(filter, option);
+            }
+        }
         return filter;
+    }
+
+    /**
+     * 收进筛选项。n 是界面文字，v 是请求值。同名选项都保留。
+     *
+     * @param filter 正在解析的筛选项
+     * @param ele 数组里的一项，可以是 {n,v} 或一个字符串
+     */
+    private void addFilterOption(MovieSort.SortFilter filter, JsonElement ele) {
+        if (filter == null || ele == null || ele.isJsonNull()) {
+            return;
+        }
+        MovieSort.FilterOption option = new MovieSort.FilterOption();
+        if (ele.isJsonPrimitive()) {
+            option.name = ele.getAsString();
+            option.value = option.name;
+        } else if (ele.isJsonObject()) {
+            JsonObject item = ele.getAsJsonObject();
+            option.name = item.has("n") && !item.get("n").isJsonNull() ? item.get("n").getAsString() : "";
+            option.value = item.has("v") && !item.get("v").isJsonNull() ? item.get("v").getAsString() : "";
+            if (option.name.length() == 0) {
+                option.name = option.value;
+            }
+        } else {
+            return;
+        }
+        addFilterOption(filter, option);
+    }
+
+    /**
+     * @param filter 正在解析的筛选项
+     * @param option 已经拆好的一项
+     */
+    private void addFilterOption(MovieSort.SortFilter filter, MovieSort.FilterOption option) {
+        if (filter == null || option == null) {
+            return;
+        }
+        if (option.name == null) {
+            option.name = "";
+        }
+        if (option.value == null) {
+            option.value = "";
+        }
+        if (option.name.length() == 0 && option.value.length() == 0) {
+            return;
+        }
+        filter.options.add(option);
+        if (option.name.length() > 0 && !filter.values.containsKey(option.name)) {
+            filter.values.put(option.name, option.value);
+        }
     }
 
     private AbsSortXml sortJson(MutableLiveData<AbsSortXml> result, String json) {
@@ -2014,31 +2152,53 @@ public class SourceViewModel extends ViewModel {
             }.getType());
             AbsSortXml data = sortJson.toAbsSortXml();
             try {
-                if (obj.has("filters")) {
+                if (obj.has("filters") && obj.get("filters").isJsonObject()) {
                     LinkedHashMap<String, ArrayList<MovieSort.SortFilter>> sortFilters = new LinkedHashMap<>();
                     JsonObject filters = obj.getAsJsonObject("filters");
                     for (String key : filters.keySet()) {
-                        ArrayList<MovieSort.SortFilter> sortFilter = new ArrayList<>();
-                        JsonElement one = filters.get(key);
-                        if (one.isJsonObject()) {
-                            sortFilter.add(getSortFilter(one.getAsJsonObject()));
-                        } else {
-                            for (JsonElement ele : one.getAsJsonArray()) {
-                                sortFilter.add(getSortFilter(ele.getAsJsonObject()));
+                        try {
+                            ArrayList<MovieSort.SortFilter> sortFilter = new ArrayList<>();
+                            JsonElement one = filters.get(key);
+                            if (one != null && one.isJsonObject()) {
+                                MovieSort.SortFilter parsed = getSortFilter(one.getAsJsonObject());
+                                if (parsed != null) {
+                                    sortFilter.add(parsed);
+                                }
+                            } else if (one != null && one.isJsonArray()) {
+                                for (JsonElement ele : one.getAsJsonArray()) {
+                                    if (ele == null || !ele.isJsonObject()) {
+                                        continue;
+                                    }
+                                    MovieSort.SortFilter parsed = getSortFilter(ele.getAsJsonObject());
+                                    if (parsed != null) {
+                                        sortFilter.add(parsed);
+                                    }
+                                }
                             }
+                            if (!sortFilter.isEmpty()) {
+                                sortFilters.put(key == null ? "" : key.trim(), sortFilter);
+                            }
+                        } catch (Throwable th) {
+                            LOG.e("echo-filter-parse: " + key + " " + th.getMessage());
                         }
-                        sortFilters.put(key, sortFilter);
                     }
                     if (data.classes != null && data.classes.sortList != null) {
                         for (MovieSort.SortData sort : data.classes.sortList) {
-                            if (sortFilters.containsKey(sort.id) && sortFilters.get(sort.id) != null) {
-                                sort.filters = sortFilters.get(sort.id);
+                            if (sort == null || sort.id == null) {
+                                continue;
+                            }
+                            ArrayList<MovieSort.SortFilter> matched = sortFilters.get(sort.id.trim());
+                            if (matched != null) {
+                                sort.filters = matched;
+                                applyFilterInit(sort);
                             }
                         }
                     }
+                } else if (obj.has("filters")) {
+                    LOG.e("echo-filter-parse: filters 不是对象");
                 }
             } catch (Throwable th) {
-
+                LOG.e("echo-filter-parse: " + th.getMessage());
             }
             return data;
         } catch (Exception e) {
