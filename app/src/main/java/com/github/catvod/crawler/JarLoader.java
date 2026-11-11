@@ -61,13 +61,23 @@ public class JarLoader {
         setRecentJarKey(key);
     }
 
-    public void clear() {
+    /**
+     * 只丢掉已经创建的爬虫实例，已加载的 dex 留着。
+     * 配置更新但爬虫包地址没变时用，避免栏目请求找不到类，全部变成没数据。
+     */
+    public void clearSpiders() {
         for (Spider spider : spiders.values()) {
             try {
                 spider.destroy();
             } catch (Throwable ignored) {
             }
         }
+        spiders.clear();
+        siteJarKeys.clear();
+    }
+
+    public void clear() {
+        clearSpiders();
         loaders.clear();
         proxyMethods.clear();
         danmuClickMethods.clear();

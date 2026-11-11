@@ -1156,8 +1156,25 @@ public class ApiConfig {
         return trimContent;
     }
 
-    private void resetConfigData() {
-        clearSpiderCache();
+    /**
+     * 换配置前清掉上一份站点数据。
+     * 爬虫包地址没变时不能卸掉已加载的 dex，否则首页不再重新加载，栏目会全部没数据。
+     *
+     * @param nextSpider 即将生效的爬虫包地址，含 md5
+     */
+    private void resetConfigData(String nextSpider) {
+        String current = spider == null ? "" : spider;
+        String incoming = nextSpider == null ? "" : nextSpider;
+        if (incoming.equals(current)) {
+            jarLoader.clearSpiders();
+            pyLoader.clear();
+            jsLoader.clear();
+            currentPyKey = "";
+            currentLivePyKey = "";
+            currentLiveSpider = "";
+        } else {
+            clearSpiderCache();
+        }
         currentPlaySourceKey = "";
         sourceBeanList.clear();
         liveChannelGroupList.clear();
@@ -1181,14 +1198,15 @@ public class ApiConfig {
 
     private static  String jarCache ="true";
     private void parseJson(String apiUrl, String jsonStr) {
-        resetConfigData();
         jsonStr = stripJsonLineComments(jsonStr);
         JsonObject infoJson = gson.fromJson(jsonStr, JsonObject.class);
         if (infoJson == null) {
             throw new IllegalArgumentException("配置内容为空");
         }
+        String nextSpider = DefaultConfig.safeJsonString(infoJson, "spider", "");
+        resetConfigData(nextSpider);
         // spider
-        spider = DefaultConfig.safeJsonString(infoJson, "spider", "");
+        spider = nextSpider;
         jarCache = DefaultConfig.safeJsonString(infoJson, "jarCache", "true");
         danmaku = DefaultConfig.safeJsonString(infoJson, "danmaku", "");
         // wallpaper
