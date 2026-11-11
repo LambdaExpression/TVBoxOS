@@ -43,8 +43,26 @@ jobs:
 
       - name: 确认 Android SDK
         run: |
-          if [ -z "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ]; then
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$sdk_root" ]; then
             echo "运行器上没有 Android SDK"
+            exit 1
+          fi
+          # 运行器只带较新的 platform 和 build-tools。这个工程仍用 compileSdk 33、build-tools 30.0.3。
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            echo "找不到 sdkmanager: $sdkmanager"
+            exit 1
+          fi
+          if [ -w "$sdk_root" ]; then
+            sudo_cmd=()
+          else
+            sudo_cmd=(sudo)
+          fi
+          yes | "${sudo_cmd[@]}" "$sdkmanager" --sdk_root="$sdk_root" --licenses >/dev/null || true
+          "${sudo_cmd[@]}" "$sdkmanager" --sdk_root="$sdk_root" "platforms;android-33" "build-tools;30.0.3"
+          if [ ! -d "$sdk_root/platforms/android-33" ] || [ ! -d "$sdk_root/build-tools/30.0.3" ]; then
+            echo "Android SDK 组件没有装上: platforms;android-33 build-tools;30.0.3"
             exit 1
           fi
 

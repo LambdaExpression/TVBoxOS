@@ -1,4 +1,18 @@
 rootProject.name = "TVBox"
+
+// Chaquopy 12 配置 :pyramid 时会直接打开仓库根目录的 local.properties，文件不存在就失败。
+// Android Studio 会自己生成；流水线只有 ANDROID_SDK_ROOT。缺文件时按环境变量补一份，不覆盖本机已有配置。
+def localProperties = new File(rootDir, "local.properties")
+if (!localProperties.exists()) {
+    def sdkDir = System.getenv("ANDROID_SDK_ROOT")
+    if (sdkDir == null || sdkDir.trim().isEmpty()) {
+        sdkDir = System.getenv("ANDROID_HOME")
+    }
+    if (sdkDir != null && !sdkDir.trim().isEmpty()) {
+        localProperties.setText("sdk.dir=${sdkDir.trim().replace('\\', '/')}\n", "UTF-8")
+    }
+}
+
 include ':app'
 include ':player'
 include ':quickjs'
