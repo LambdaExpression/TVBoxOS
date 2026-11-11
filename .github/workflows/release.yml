@@ -22,6 +22,15 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: 确认这个提交可以发布
+        run: |
+          # 这次 diff 改了 .github/workflows 时，Actions 自带的 token 创建 Release 会 403。
+          # 它没有 workflows 权限，也不能单独加上。这种提交直接停，避免白打包九分钟。
+          if git diff --name-only HEAD^ HEAD -- .github/workflows | grep -q .; then
+            echo "这次提交改了 .github/workflows，不能用它创建 Release。"
+            exit 1
+          fi
+
       - name: 安装 Python 3.8
         uses: actions/setup-python@v5
         with:
@@ -177,3 +186,5 @@ jobs:
           bodyFile: release-notes.txt
           artifacts: app/build/outputs/apk/**/TVBox_release-*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
+          # 先建草稿，装上安装包，再公开发布。直接发布在部分仓库上会被拒绝。
+          immutableCreate: true
