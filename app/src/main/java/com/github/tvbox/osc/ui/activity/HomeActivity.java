@@ -101,6 +101,8 @@ public class HomeActivity extends BaseActivity {
     private String previousHomeName;
     private SourceBean previousHomeSource;
     private boolean homeSortLoading = false;
+    /** 这一轮首页分类结果必须画出来。冷启动不盖住旧内容时也要接，否则转圈不会停。 */
+    private boolean homeSortPending = false;
     private boolean refreshHomeRec = false;
     private final Handler mHandler = new Handler();
     private long mExitTime = 0;
@@ -336,7 +338,7 @@ public class HomeActivity extends BaseActivity {
                     }
                     return;
                 }
-                if (!homeSortLoading && !homeSortAwaitingRefresh) {
+                if (!homeSortPending && !homeSortLoading && !homeSortAwaitingRefresh) {
                     return;
                 }
                 if (absXml != null && absXml.sourceKey != null && loadingSourceKey != null && !loadingSourceKey.equals(absXml.sourceKey)) {
@@ -378,6 +380,7 @@ public class HomeActivity extends BaseActivity {
     private void finishHomeSortRefresh() {
         homeSortAwaitingRefresh = false;
         homeSortLoading = false;
+        homeSortPending = false;
         loadingSourceKey = null;
     }
 
@@ -634,6 +637,7 @@ public class HomeActivity extends BaseActivity {
 
     private void loadHomeSort(boolean keepCurrentContent) {
         SourceBean home = ApiConfig.get().getHomeSourceBean();
+        homeSortPending = true;
         homeSortLoading = keepCurrentContent;
         if (keepCurrentContent && home != null && home.getName() != null && !home.getName().isEmpty()) {
             previousHomeName = tvName.getText() == null ? null : tvName.getText().toString();
@@ -789,6 +793,9 @@ public class HomeActivity extends BaseActivity {
         }
     }
 
+    /** 离开过首页。第一次 onResume 不算回来，避免刚打开就把后台结果换上。 */
+    private boolean homeLeft;
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -798,15 +805,52 @@ public class HomeActivity extends BaseActivity {
         mHandler.removeCallbacks(refreshTopLayoutRunnable);
         mHandler.postDelayed(refreshTopLayoutRunnable, 450);
         mHandler.post(mRunnable);
+        if (homeLeft) {
+            homeLeft = false;
+            applyPendingConfig();
+        }
     }
 
 
     @Override
     protected void onPause() {
+        homeLeft = true;
         super.onPause();
         mHandler.removeCallbacks(refreshTopInfoTextSizeRunnable);
         mHandler.removeCallbacks(refreshTopLayoutRunnable);
         mHandler.removeCallbacks(mRunnable);
+    }
+
+    /**
+     * 用户回到首页时，把后台已经拉到、且和当前画面不同的配置换上。
+     * 人还停在首页时不会调用。爬虫地址变了就按原来的更新路径先换 jar。
+     */
+    private void applyPendingConfig() {
+        if (isActivityUnavailable() || !ApiConfig.get().hasPendingConfig()) {
+            return;
+        }
+        String before = ApiConfig.get().getSpider();
+        if (before == null) {
+            before = "";
+        }
+        if (!ApiConfig.get().applyPendingConfig()) {
+            return;
+        }
+        configEpoch++;
+        String spider = ApiConfig.get().getSpider();
+        if (spider == null) {
+            spider = "";
+        }
+        if (!spider.equals(before) || !spider.equals(shownSpider)) {
+            jarInitOk = false;
+            dataInitOk = true;
+            initData();
+            return;
+        }
+        if (!jarInitOk) {
+            return;
+        }
+        loadHomeSort(true);
     }
 
     private void refreshTopInfoTextSize() {
@@ -1093,6 +1137,7 @@ public class HomeActivity extends BaseActivity {
     private void cancelHomeSortLoading() {
         homeSortAwaitingRefresh = false;
         homeSortLoading = false;
+        homeSortPending = false;
         loadingSourceKey = null;
         if (sourceViewModel != null) {
             sourceViewModel.cancelSortRequest();

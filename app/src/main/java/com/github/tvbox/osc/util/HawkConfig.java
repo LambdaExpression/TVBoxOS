@@ -9,6 +9,10 @@ public class HawkConfig {
     public static final String API_URL = "api_url";
     /** 未手动保存过配置地址时使用的订阅地址。用户一旦保存（含清空），不再回写。 */
     public static final String DEFAULT_API_URL = "http://www.饭太硬.cc/tv";
+    /** 内置爬虫包对应的下载地址。只在本机还没有这个包时，用 assets 里的文件。 */
+    public static final String DEFAULT_SPIDER_URL = "https://xiuxiu-pro-new.meitudata.com/posters/937f5abf1c7c4ff2f170d835c5c46c21.jpg";
+    /** 配置后台更新的结果文案，设置页直接展示。 */
+    public static final String CONFIG_UPDATE_STATUS = "config_update_status";
     public static final String EPG_URL = "epg_url";
     public static final String SHOW_PREVIEW = "show_preview";
     public static final String API_HISTORY = "api_history";

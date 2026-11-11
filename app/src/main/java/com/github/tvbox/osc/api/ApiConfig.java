@@ -16,6 +16,7 @@ import com.github.catvod.crawler.pyLoader;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.python.IPyLoader;
 import com.github.tvbox.osc.base.App;
+import com.github.tvbox.osc.event.RefreshEvent;
 import com.github.tvbox.osc.bean.LiveChannelGroup;
 import com.github.tvbox.osc.bean.IJKCode;
 import com.github.tvbox.osc.bean.LiveChannelItem;
@@ -44,6 +45,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.orhanobut.hawk.Hawk;
 
+import org.greenrobot.eventbus.EventBus;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -54,8 +56,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URLDecoder;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.Locale;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -100,6 +105,14 @@ public class ApiConfig {
     private final ExecutorService danmuSearchExecutor = Executors.newSingleThreadExecutor();
 
     private final String userAgent = "okhttp/3.15";
+    /** 保护当前正在用的配置正文和尚未换上的后台结果。 */
+    private final Object configUpdateLock = new Object();
+    /** 这次已经解析进内存、用户正在用的配置正文。 */
+    private String shownConfigBody = "";
+    /** 后台拉到、等用户回到首页再换上的配置。为空表示没有待换内容。 */
+    private String pendingConfigBody;
+    /** pendingConfigBody 对应的订阅地址。地址变了就不再换上。 */
+    private String pendingConfigUrl;
 
     private ApiConfig() {
         clearLoader();
@@ -153,6 +166,63 @@ public class ApiConfig {
         return json;
     }
 
+    /**
+     * 从订阅正文里取出配置。图片响应按原始字节找 8 位标记和 **，只把后面的 ASCII 做 base64，避免 UTF-8 替换把尾部配置换掉。
+     */
+    private static String decodeConfigBody(byte[] raw, String configKey) {
+        if (raw == null || raw.length == 0) {
+            return "";
+        }
+        int marker = findConfigMarker(raw);
+        String text;
+        if (marker >= 0) {
+            byte[] tail = Arrays.copyOfRange(raw, marker + 10, raw.length);
+            byte[] decoded = Base64.decode(tail, Base64.DEFAULT);
+            if (decoded == null || decoded.length == 0) {
+                return "";
+            }
+            try {
+                text = new String(decoded, "UTF-8");
+            } catch (java.io.UnsupportedEncodingException e) {
+                text = new String(decoded);
+            }
+        } else {
+            try {
+                text = new String(raw, "UTF-8");
+            } catch (java.io.UnsupportedEncodingException e) {
+                text = new String(raw);
+            }
+        }
+        return FindResult(text, configKey);
+    }
+
+    /** 查找形如 BFkMrNQT** 的标记。找不到返回 -1。 */
+    private static int findConfigMarker(byte[] body) {
+        if (body.length < 10) {
+            return -1;
+        }
+        for (int i = 0; i <= body.length - 10; i++) {
+            if (body[i + 8] != '*' || body[i + 9] != '*') {
+                continue;
+            }
+            boolean matched = true;
+            for (int j = 0; j < 8; j++) {
+                int c = body[i + j] & 0xff;
+                boolean digit = c >= '0' && c <= '9';
+                boolean upper = c >= 'A' && c <= 'Z';
+                boolean lower = c >= 'a' && c <= 'z';
+                if (!digit && !upper && !lower) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private static byte[] getImgJar(String body){
         Pattern pattern = getPattern("[A-Za-z0-9]{8}\\*\\*");
         Matcher matcher = pattern.matcher(body);
@@ -189,10 +259,10 @@ public class ApiConfig {
     }
 
     /**
-     * 拉取点播配置。冷启动会先用上次缓存，再在后台换成新的。
+     * 拉取点播配置。有本机缓存或内置订阅时先交给界面，远程更新在后台进行，不挡住首页。
      *
-     * @param useCache true 时只用本地缓存，设置页返回走这条
-     * @param callback 成功、失败，以及缓存已经显示后的更新
+     * @param useCache true 时只用本地，设置页返回走这条，不再打网络
+     * @param callback 本地或网络结果。本地已经成功时，后台失败不再调用 error
      */
     public void loadConfig(boolean useCache, LoadConfigCallback callback) {
         loadConfig(useCache, callback, null);
@@ -200,95 +270,272 @@ public class ApiConfig {
 
     public void loadConfig(boolean useCache, LoadConfigCallback callback, Activity activity) {
         String apiUrl = Hawk.get(HawkConfig.API_URL, "");
-        if (apiUrl.isEmpty()) {
+        if (apiUrl == null || apiUrl.isEmpty()) {
             callback.error("-1");
             return;
         }
-        File cache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/" + MD5.encode(apiUrl));
-        boolean parsedCache = false;
-        if (cache.exists()) {
+        File cache = configCacheFile(apiUrl);
+        if (cache.isFile() && cache.length() > 0) {
             try {
                 String json = readConfigFile(cache);
                 if (switchApiCollectionIfNeeded(apiUrl, json)) {
                     loadConfig(false, callback, activity);
                     return;
                 }
-                clearApiLinesIfUnmatched(apiUrl);
-                parseJson(apiUrl, json);
-                callback.success();
-                parsedCache = true;
-                // 从设置返回时沿用这次缓存，不再打网络。冷启动先显示，再在下面刷新。
-                if (useCache) {
+                if (deliverLocalConfig(apiUrl, json, callback)) {
+                    if (!useCache) {
+                        refreshConfigInBackground(apiUrl, cache, true, callback, activity);
+                    }
                     return;
                 }
             } catch (Throwable th) {
-                LOG.e("echo-config-cache-parse: " + th.getMessage());
+                LOG.e("echo-config-cache-parse: " + apiUrl + " " + th.getMessage());
             }
         }
-        final boolean showedCache = parsedCache;
+        if (HawkConfig.DEFAULT_API_URL.equals(apiUrl)) {
+            String bundled = readAssetConfig();
+            if (!TextUtils.isEmpty(bundled)) {
+                try {
+                    if (switchApiCollectionIfNeeded(apiUrl, bundled)) {
+                        loadConfig(false, callback, activity);
+                        return;
+                    }
+                    if (deliverLocalConfig(apiUrl, bundled, callback)) {
+                        if (!useCache) {
+                            refreshConfigInBackground(apiUrl, cache, true, callback, activity);
+                        }
+                        return;
+                    }
+                } catch (Throwable th) {
+                    LOG.e("echo-config-asset-parse: " + apiUrl + " " + th.getMessage());
+                }
+            }
+        }
+        refreshConfigInBackground(apiUrl, cache, false, callback, activity);
+    }
+
+    /**
+     * 把一份已经在本地的配置解析进内存，并通知界面可以进首页。
+     *
+     * @return 正文里有站点并已回调 success
+     */
+    private boolean deliverLocalConfig(String apiUrl, String json, LoadConfigCallback callback) {
+        if (countSites(json) <= 0) {
+            return false;
+        }
+        clearApiLinesIfUnmatched(apiUrl);
+        parseJson(apiUrl, json);
+        synchronized (configUpdateLock) {
+            shownConfigBody = json;
+            if (json.equals(pendingConfigBody) && apiUrl.equals(pendingConfigUrl)) {
+                pendingConfigBody = null;
+                pendingConfigUrl = null;
+            }
+        }
+        LOG.i("echo-config-local url=" + apiUrl + " sites=" + sourceBeanList.size());
+        callback.success();
+        return true;
+    }
+
+    /**
+     * 后台拉取订阅。本地已经在用时，失败只记到设置页；成功且内容有变化时先写入缓存，等回到首页再换。
+     */
+    private void refreshConfigInBackground(final String apiUrl, final File cache, final boolean deliveredLocal, final LoadConfigCallback callback, final Activity activity) {
+        setConfigUpdateStatus("更新中");
         String configUrl = configUrl(apiUrl);
         final String configKey = TempKey;
         fetchConfigAsync(apiUrl, configUrl, configKey, new ConfigFetchCallback() {
             @Override
             public void success(String json) {
                 try {
-                    if (json == null) {
-                        if (!showedCache) {
-                            callback.error("配置内容为空");
-                        }
+                    if (json == null || json.trim().isEmpty()) {
+                        finishConfigRefresh(deliveredLocal, callback, apiUrl, "配置内容为空", false);
                         return;
-                    }
-                    if (showedCache) {
-                        String cached = readConfigFile(cache);
-                        if (json.equals(cached)) {
-                            return;
-                        }
                     }
                     if (switchApiCollectionIfNeeded(apiUrl, json)) {
                         FileUtils.saveCache(cache, json);
                         loadConfig(false, callback, activity);
                         return;
                     }
+                    int sites = countSites(json);
+                    if (sites <= 0) {
+                        finishConfigRefresh(deliveredLocal, callback, apiUrl, "配置里没有站点", false);
+                        return;
+                    }
                     clearApiLinesIfUnmatched(apiUrl);
-                    parseJson(apiUrl, json);
+                    boolean same;
+                    synchronized (configUpdateLock) {
+                        same = json.equals(shownConfigBody);
+                    }
                     FileUtils.saveCache(cache, json);
-                    if (showedCache) {
-                        callback.updated();
-                    } else {
-                        callback.success();
+                    if (deliveredLocal) {
+                        if (!same) {
+                            synchronized (configUpdateLock) {
+                                pendingConfigBody = json;
+                                pendingConfigUrl = apiUrl;
+                            }
+                        }
+                        LOG.i("echo-config-refresh url=" + apiUrl + " sites=" + sites + " changed=" + !same);
+                        setConfigUpdateStatus("成功 " + configUpdateTime());
+                        return;
                     }
+                    parseJson(apiUrl, json);
+                    synchronized (configUpdateLock) {
+                        shownConfigBody = json;
+                        pendingConfigBody = null;
+                        pendingConfigUrl = null;
+                    }
+                    LOG.i("echo-config-network url=" + apiUrl + " sites=" + sourceBeanList.size());
+                    setConfigUpdateStatus("成功 " + configUpdateTime());
+                    callback.success();
                 } catch (Throwable th) {
-                    LOG.e("echo-config-parse: " + th.getMessage());
-                    if (!showedCache) {
-                        callback.error("配置解析失败");
-                    }
+                    LOG.e("echo-config-parse: " + apiUrl + " " + th.getMessage());
+                    finishConfigRefresh(deliveredLocal, callback, apiUrl, "配置解析失败", false);
                 }
             }
 
             @Override
             public void error(String error) {
-                if (showedCache) {
-                    LOG.e("echo-config-refresh-failed: " + error);
-                    return;
-                }
-                if (cache.exists()) {
-                    try {
-                        String json = readConfigFile(cache);
-                        if (switchApiCollectionIfNeeded(apiUrl, json)) {
-                            loadConfig(false, callback, activity);
-                            return;
-                        }
-                        clearApiLinesIfUnmatched(apiUrl);
-                        parseJson(apiUrl, json);
-                        callback.success();
-                        return;
-                    } catch (Throwable th) {
-                        LOG.e("echo-config-cache-parse: " + th.getMessage());
-                    }
-                }
-                callback.error("拉取配置失败\n" + error);
+                String reason = TextUtils.isEmpty(error) ? "未知错误" : error;
+                LOG.e("echo-config-refresh-failed: " + apiUrl + " " + reason);
+                finishConfigRefresh(deliveredLocal, callback, apiUrl, reason, true);
             }
         });
+    }
+
+    /**
+     * 后台失败时，本地配置已经在用就只更新设置页文案。
+     *
+     * @param networkMessage true 时给界面的错误带上「拉取配置失败」前缀，和原来的弹窗一致
+     */
+    private void finishConfigRefresh(boolean deliveredLocal, LoadConfigCallback callback, String apiUrl, String reason, boolean networkMessage) {
+        setConfigUpdateStatus("失败 " + shortenStatus(reason));
+        if (deliveredLocal || callback == null) {
+            return;
+        }
+        callback.error(networkMessage ? "拉取配置失败\n" + reason : reason);
+    }
+
+    /**
+     * 用户离开首页再回来时，如果后台有一份还没换上的配置，解析它并清掉待换标记。
+     *
+     * @return 已经换上新配置
+     */
+    public boolean applyPendingConfig() {
+        String body;
+        String url;
+        synchronized (configUpdateLock) {
+            if (TextUtils.isEmpty(pendingConfigBody) || pendingConfigUrl == null) {
+                return false;
+            }
+            url = Hawk.get(HawkConfig.API_URL, "");
+            if (!pendingConfigUrl.equals(url)) {
+                pendingConfigBody = null;
+                pendingConfigUrl = null;
+                return false;
+            }
+            body = pendingConfigBody;
+            pendingConfigBody = null;
+            pendingConfigUrl = null;
+        }
+        try {
+            parseJson(url, body);
+        } catch (Throwable th) {
+            LOG.e("echo-config-apply: " + url + " " + th.getMessage());
+            return false;
+        }
+        synchronized (configUpdateLock) {
+            shownConfigBody = body;
+        }
+        LOG.i("echo-config-apply url=" + url + " sites=" + sourceBeanList.size());
+        return true;
+    }
+
+    /**
+     * 是否有一份已写入缓存、但当前界面还在用旧配置的更新。
+     */
+    public boolean hasPendingConfig() {
+        synchronized (configUpdateLock) {
+            if (TextUtils.isEmpty(pendingConfigBody) || pendingConfigUrl == null) {
+                return false;
+            }
+            String url = Hawk.get(HawkConfig.API_URL, "");
+            return pendingConfigUrl.equals(url);
+        }
+    }
+
+    /** 设置页展示的配置更新状态。还没有结果时给出占位文案。 */
+    public static String getConfigUpdateStatusText() {
+        String status = Hawk.get(HawkConfig.CONFIG_UPDATE_STATUS, "");
+        if (status == null || status.length() == 0) {
+            return "配置更新：尚未更新";
+        }
+        return "配置更新：" + status;
+    }
+
+    private void setConfigUpdateStatus(String status) {
+        Hawk.put(HawkConfig.CONFIG_UPDATE_STATUS, status == null ? "" : status);
+        EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_CONFIG_UPDATE, status));
+    }
+
+    private static String configUpdateTime() {
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(new Date());
+    }
+
+    private static String shortenStatus(String reason) {
+        if (reason == null) {
+            return "未知错误";
+        }
+        String text = reason.replace('\n', ' ').trim();
+        if (text.length() == 0) {
+            return "未知错误";
+        }
+        if (text.length() > 80) {
+            return text.substring(0, 80);
+        }
+        return text;
+    }
+
+    private File configCacheFile(String apiUrl) {
+        return new File(App.getInstance().getFilesDir().getAbsolutePath() + "/" + MD5.encode(apiUrl == null ? "" : apiUrl));
+    }
+
+    /** 统计订阅里的站点数量。解析不了或没有 sites 时返回 0。 */
+    private int countSites(String json) {
+        if (TextUtils.isEmpty(json)) {
+            return 0;
+        }
+        try {
+            JsonObject obj = gson.fromJson(trimJsonObject(stripJsonLineComments(json)), JsonObject.class);
+            if (obj != null && obj.has("sites") && obj.get("sites").isJsonArray()) {
+                return obj.getAsJsonArray("sites").size();
+            }
+        } catch (Throwable th) {
+            LOG.e("echo-config-count-sites: " + th.getMessage());
+        }
+        return 0;
+    }
+
+    /** 读取随应用发布的默认订阅。文件缺失或读失败时返回空串。 */
+    private String readAssetConfig() {
+        InputStream input = null;
+        BufferedReader reader = null;
+        try {
+            input = App.getInstance().getAssets().open("default_api.json");
+            reader = new BufferedReader(new InputStreamReader(input, "UTF-8"));
+            StringBuilder builder = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                builder.append(line).append('\n');
+            }
+            return builder.toString();
+        } catch (Throwable th) {
+            LOG.e("echo-config-asset: " + th.getMessage());
+            return "";
+        } finally {
+            closeQuietly(reader);
+            closeQuietly(input);
+        }
     }
 
     /**
@@ -459,7 +706,8 @@ public class ApiConfig {
                     } else if (response.body() == null) {
                         error = "empty body";
                     } else {
-                        result = FindResult(response.body().string(), configKey);
+                        byte[] raw = response.body().bytes();
+                        result = decodeConfigBody(raw, configKey);
                         if (apiUrl.startsWith("clan")) {
                             result = clanContentFix(clanToAddress(apiUrl), result);
                         }
@@ -598,6 +846,56 @@ public class ApiConfig {
         }
     }
 
+    /**
+     * 本机还没有默认爬虫包时，把 assets 里的文件拷到现有缓存路径。md5 一致时后面的加载不会再下载。
+     */
+    private void seedBundledJar(String jarUrl, File cache) {
+        if (cache == null || !HawkConfig.DEFAULT_SPIDER_URL.equals(jarUrl)) {
+            return;
+        }
+        if (cache.isFile() && cache.length() > 0) {
+            return;
+        }
+        InputStream input = null;
+        FileOutputStream output = null;
+        File temp = new File(cache.getAbsolutePath() + ".asset");
+        try {
+            File parent = cache.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                LOG.e("echo-jar-asset-mkdir: " + parent.getAbsolutePath());
+                return;
+            }
+            if (temp.exists() && !temp.delete()) {
+                LOG.i("echo-jar-asset-temp-delete: " + temp.getAbsolutePath());
+            }
+            input = App.getInstance().getAssets().open("csp/default.jar");
+            output = new FileOutputStream(temp);
+            byte[] buffer = new byte[16384];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+            closeQuietly(output);
+            output = null;
+            if (!temp.renameTo(cache)) {
+                FileUtils.copyFile(temp, cache);
+                if (!temp.delete()) {
+                    LOG.i("echo-jar-asset-temp-left: " + temp.getAbsolutePath());
+                }
+            }
+            LOG.i("echo-jar-asset-ready: " + cache.getAbsolutePath());
+        } catch (Throwable th) {
+            LOG.e("echo-jar-asset-copy: " + th.getMessage());
+            if (temp.exists() && !temp.delete()) {
+                LOG.i("echo-jar-asset-temp-left: " + temp.getAbsolutePath());
+            }
+        } finally {
+            closeQuietly(input);
+            closeQuietly(output);
+        }
+    }
+
     private void loadJar(boolean useCache, String spider, LoadConfigCallback callback, int retryCount, final Activity activity) {
         if (spider == null || spider.trim().isEmpty()) {
             callback.error("爬虫地址为空");
@@ -607,6 +905,7 @@ public class ApiConfig {
         String jarUrl = urls[0];
         String md5 = urls.length > 1 ? urls[1].trim() : "";
         File cache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/csp/"+MD5.string2MD5(jarUrl)+".jar");
+        seedBundledJar(jarUrl, cache);
         // 冷启动时本地包先用起来。校验留到后台，避免首页干等下载。
         if (retryCount == 0 && cache.isFile() && cache.length() > 0) {
             final String refreshUrl = jarUrl;

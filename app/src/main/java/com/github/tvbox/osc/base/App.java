@@ -40,6 +40,8 @@ public class App extends MultiDexApplication {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        // 先接住崩溃并读出上次日志，后面的初始化失败才能留在设置页里。
+        LOG.init();
         initParams();
         // OKGo
         OkGoHelper.init(); //台标获取

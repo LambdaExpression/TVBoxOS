@@ -25,6 +25,8 @@ public class RefreshEvent {
     public static final int TYPE_SET_DANMU_SETTINGS = 18;
     public static final int TYPE_DANMU_REFRESH = 19;
     public static final int TYPE_PLAY_QUALITY = 20;
+    /** 后台配置更新的状态变了，设置页刷新那一行文案。 */
+    public static final int TYPE_CONFIG_UPDATE = 21;
     public int type;
     public Object obj;
 

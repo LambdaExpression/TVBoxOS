@@ -30,6 +30,7 @@ import com.github.tvbox.osc.ui.activity.SettingActivity;
 import com.github.tvbox.osc.ui.adapter.ApiHistoryDialogAdapter;
 import com.github.tvbox.osc.ui.adapter.SelectDialogAdapter;
 import com.github.tvbox.osc.ui.dialog.AboutDialog;
+import com.github.tvbox.osc.ui.dialog.LogDialog;
 import com.github.tvbox.osc.ui.dialog.ApiDialog;
 import com.github.tvbox.osc.ui.dialog.ApiHistoryDialog;
 import com.github.tvbox.osc.ui.dialog.BackupDialog;
@@ -56,6 +57,8 @@ import com.hjq.permissions.Permission;
 import com.hjq.permissions.XXPermissions;
 
 import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
@@ -81,6 +84,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
     private TextView tvRender;
     private TextView tvScale;
     private TextView tvApi;
+    private TextView tvConfigUpdate;
     private TextView tvApiLine;
     private View llApi;
     private View llApiHistory;
@@ -147,6 +151,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
         llApiLine = findViewById(R.id.llApiLine);
         tvApi = findViewById(R.id.tvApi);
         tvApiLine = findViewById(R.id.tvApiLine);
+        tvConfigUpdate = findViewById(R.id.tvConfigUpdate);
         tvHomeApi = findViewById(R.id.tvHomeApi);
         tvDns = findViewById(R.id.tvDns);
         tvHomeRec = findViewById(R.id.tvHomeRec);
@@ -160,6 +165,10 @@ public class ModelSettingFragment extends BaseLazyFragment {
         tvDebugOpen.setText(Hawk.get(HawkConfig.DEBUG_OPEN, false) ? "已打开" : "已关闭");
         tvParseWebView.setText(Hawk.get(HawkConfig.PARSE_WEBVIEW, true) ? "系统自带" : "XWalkView");
         tvApi.setText(Hawk.get(HawkConfig.API_URL, ""));
+        refreshConfigUpdateStatus();
+        if (!EventBus.getDefault().isRegistered(this)) {
+            EventBus.getDefault().register(this);
+        }
         refreshApiLineText();
 
         tvDns.setText(OkGoHelper.dnsHttpsList.get(Hawk.get(HawkConfig.DOH_URL, 0)));
@@ -220,6 +229,14 @@ public class ModelSettingFragment extends BaseLazyFragment {
             public void onClick(View v) {
                 FastClickCheckUtil.check(v);
                 AboutDialog dialog = new AboutDialog(mActivity);
+                dialog.show();
+            }
+        });
+        findViewById(R.id.llLog).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                FastClickCheckUtil.check(v);
+                LogDialog dialog = new LogDialog(mActivity);
                 dialog.show();
             }
         });
@@ -1180,8 +1197,27 @@ public class ModelSettingFragment extends BaseLazyFragment {
 
     @Override
     public void onDestroyView() {
+        if (EventBus.getDefault().isRegistered(this)) {
+            EventBus.getDefault().unregister(this);
+        }
         super.onDestroyView();
         SettingActivity.callback = null;
+    }
+
+    /** 后台配置更新状态变化时刷新设置页那一行。 */
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onConfigUpdate(RefreshEvent event) {
+        if (event != null && event.type == RefreshEvent.TYPE_CONFIG_UPDATE) {
+            refreshConfigUpdateStatus();
+        }
+    }
+
+    /** 读取最近一次配置更新结果。控件还没创建时不写。 */
+    private void refreshConfigUpdateStatus() {
+        if (tvConfigUpdate == null) {
+            return;
+        }
+        tvConfigUpdate.setText(ApiConfig.getConfigUpdateStatusText());
     }
 
     String getHomeRecName(int type) {
