@@ -61,15 +61,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.Call;
@@ -190,9 +186,45 @@ public class SourceViewModel extends ViewModel {
         cacheSort(sourceKey, sortXml);
     }
 
+    /** 首页分类爬虫。和播放不共用那条单线程，切走时直接取消。 */
+    private static volatile SpiderJob sortSpiderJob;
+    /** 分类列表爬虫。取消后播放不用再等它跑完。 */
+    private static volatile SpiderJob listSpiderJob;
+    /** 丢掉过期的分类列表结果。 */
+    private final AtomicInteger listRequestSeq = new AtomicInteger();
+
     /** 取消进行中的首页分类刷新，避免切源后旧结果写回来。 */
     public void cancelSortRequest() {
         sortRequestSeq.incrementAndGet();
+        cancelJob(sortSpiderJob);
+    }
+
+    /**
+     * 停掉首页和分类里还在跑的爬虫。播放、详情开始前调用，避免它们排队。
+     */
+    public static void cancelBackgroundSpiderWork() {
+        cancelJob(sortSpiderJob);
+        cancelJob(listSpiderJob);
+    }
+
+    private static void cancelJob(SpiderJob job) {
+        if (job != null) {
+            job.cancel();
+        }
+    }
+
+    /**
+     * 扩展地址的网络请求不能在主线程上等待。已经在后台就直接跑。
+     */
+    private void runOffMain(Runnable action) {
+        if (action == null) {
+            return;
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            httpPrepareThreadPool.execute(action);
+            return;
+        }
+        action.run();
     }
 
     /**
@@ -477,6 +509,7 @@ public class SourceViewModel extends ViewModel {
         }
 
         final int requestSeq = sortRequestSeq.incrementAndGet();
+        cancelJob(sortSpiderJob);
         int homeRec = Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC);
         // 观看历史不走推荐缓存。内存里已有分类时直接用，避免每次回首页都重拉。
         if (homeRec == 2 && !shouldBypassSortCache(sourceKey, sourceBean)) {
@@ -494,32 +527,30 @@ public class SourceViewModel extends ViewModel {
 
         final int type = sourceBean.getType();
         if (type == 3) {
-            Runnable waitResponse = new Runnable() {
+            final SpiderJob job = new SpiderJob();
+            sortSpiderJob = job;
+            httpPrepareThreadPool.execute(new Runnable() {
                 @Override
                 public void run() {
-                    ExecutorService executor = Executors.newSingleThreadExecutor();
-                    Future<String> future = executor.submit(new Callable<String>() {
+                    job.run(30, new SpiderJob.Task() {
                         @Override
-                        public String call() throws Exception {
+                        public String call() {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return "";
+                            }
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
-                            String json = sp.homeContent(true);
-//                            LOG.i("echo--getSort :" + json);
-                            return json;
+                            return sp.homeContent(true);
                         }
-                    });
-                    String sortJson = null;
-                    try {
-                        sortJson = future.get(30, TimeUnit.SECONDS);
-                    } catch (TimeoutException e) {
-                        LOG.i("echo--getSort-timeout--" + sourceBean.getKey());
-                        e.printStackTrace();
-                        future.cancel(true);
-                    } catch (InterruptedException | ExecutionException e) {
-                        Throwable cause = e.getCause();
-                        LOG.i("echo--getSort-error--" + sourceBean.getKey() + "--" + e.getClass().getSimpleName() + "--" + (cause != null ? cause.getClass().getSimpleName() + ":" + cause.getMessage() : e.getMessage()));
-                        e.printStackTrace();
-                    } finally {
-                        if (sortJson != null) {
+                    }, new SpiderJob.Callback() {
+                        @Override
+                        public void onResult(String sortJson) {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return;
+                            }
+                            if (sortJson == null || sortJson.length() == 0) {
+                                deliverSort(requestSeq, sourceKey, null, hadPreview);
+                                return;
+                            }
                             final AbsSortXml sortXml = sortJson(sortResult, sortJson);
                             attachSortSource(sourceKey, sortXml);
                             if (sortXml != null && Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1) {
@@ -539,18 +570,22 @@ public class SourceViewModel extends ViewModel {
                             } else {
                                 deliverSort(requestSeq, sourceKey, sortXml, hadPreview);
                             }
-                        } else {
+                        }
+
+                        @Override
+                        public void onTimeout() {
+                            LOG.i("echo--getSort-timeout--" + sourceBean.getKey());
                             deliverSort(requestSeq, sourceKey, null, hadPreview);
                         }
-                        try {
-                            executor.shutdown();
-                        } catch (Throwable th) {
-                            th.printStackTrace();
+
+                        @Override
+                        public void onError(Throwable error) {
+                            LOG.e("echo--getSort-error--" + sourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
+                            deliverSort(requestSeq, sourceKey, null, hadPreview);
                         }
-                    }
+                    });
                 }
-            };
-            httpPrepareThreadPool.execute(waitResponse);
+            });
         } else if (type == 0 || type == 1) {
             OkGo.<String>get(sourceBean.getApi())
                     .tag(sourceBean.getKey() + "_sort")
@@ -600,6 +635,12 @@ public class SourceViewModel extends ViewModel {
                         }
                     });
         }else if (type == 4) {
+            runOffMain(new Runnable() {
+                @Override
+                public void run() {
+            if (requestSeq != sortRequestSeq.get()) {
+                return;
+            }
             String extend=sourceBean.getExt();
             extend=getFixUrl(extend);
             if(URLEncoder.encode(extend).length()<1000){
@@ -691,6 +732,8 @@ public class SourceViewModel extends ViewModel {
                     deliverSort(requestSeq, sourceKey, null, hadPreview);
                 }
             }
+                }
+            });
         } else {
             deliverSort(requestSeq, sourceKey, null, hadPreview);
         }
@@ -703,39 +746,63 @@ public class SourceViewModel extends ViewModel {
             return;
         }
         SourceBean homeSourceBean = ApiConfig.get().getHomeSourceBean();
+        if (homeSourceBean == null) {
+            LOG.i("echo-getList-source-null");
+            listResult.postValue(null);
+            return;
+        }
         int type = homeSourceBean.getType();
         if (type == 3) {
-            spThreadPool.execute(new Runnable() {
+            final int requestSeq = listRequestSeq.incrementAndGet();
+            cancelJob(listSpiderJob);
+            final SpiderJob job = new SpiderJob();
+            listSpiderJob = job;
+            int timeout = homeSourceBean.getPlayTimeoutSeconds();
+            if (timeout <= 0) {
+                timeout = 20;
+            }
+            final int listTimeout = timeout;
+            httpPrepareThreadPool.execute(new Runnable() {
                 @Override
                 public void run() {
-                    ExecutorService executor = Executors.newSingleThreadExecutor();
-                    Future<String> future = executor.submit(new Callable<String>() {
+                    job.run(listTimeout, new SpiderJob.Task() {
                         @Override
-                        public String call() throws Exception {
+                        public String call() {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return "";
+                            }
                             Spider sp = ApiConfig.get().getCSP(homeSourceBean);
                             return sp.categoryContent(sortData.id, page + "", true, sortData.filterSelect);
                         }
-                    });
-                    String json = null;
-                    try {
-                        json = future.get(homeSourceBean.getPlayTimeoutSeconds(), TimeUnit.SECONDS);
-//                        LOG.i("echo-categoryContent:"+json);
-                    } catch (TimeoutException e) {
-                        LOG.i("echo--getList-timeout--" + homeSourceBean.getKey());
-                        e.printStackTrace();
-                        future.cancel(true);
-                    } catch (InterruptedException | ExecutionException e) {
-                        Throwable cause = e.getCause();
-                        LOG.i("echo--getList-error--" + homeSourceBean.getKey() + "--" + e.getClass().getSimpleName() + "--" + (cause != null ? cause.getClass().getSimpleName() + ":" + cause.getMessage() : e.getMessage()));
-                        e.printStackTrace();
-                    } finally {
-                        executor.shutdown();
-                        if (json != null) {
-                            json(listResult, json,homeSourceBean.getKey());
-                        } else {
-                            listResult.postValue(null);
+                    }, new SpiderJob.Callback() {
+                        @Override
+                        public void onResult(String json) {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
+                            }
+                            if (json != null && json.length() > 0) {
+                                json(listResult, json, homeSourceBean.getKey());
+                            } else {
+                                listResult.postValue(null);
+                            }
                         }
-                    }
+
+                        @Override
+                        public void onTimeout() {
+                            LOG.i("echo--getList-timeout--" + homeSourceBean.getKey());
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
+                        }
+
+                        @Override
+                        public void onError(Throwable error) {
+                            LOG.e("echo--getList-error--" + homeSourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
+                        }
+                    });
                 }
             });
         } else if (type == 0 || type == 1) {
@@ -775,6 +842,9 @@ public class SourceViewModel extends ViewModel {
                         }
                     });
         }else if (type == 4) {
+            runOffMain(new Runnable() {
+                @Override
+                public void run() {
             String ext= "";
             String extend=homeSourceBean.getExt();
             extend=getFixUrl(extend);
@@ -828,7 +898,8 @@ public class SourceViewModel extends ViewModel {
                             listResult.postValue(null);
                         }
                     });
-
+                }
+            });
         } else {
             listResult.postValue(null);
         }
@@ -843,31 +914,55 @@ public class SourceViewModel extends ViewModel {
         }
         final int type = sourceBean.getType();
         if (type == 3) {
-            spThreadPool.execute(new Runnable() {
+            final int requestSeq = listRequestSeq.incrementAndGet();
+            cancelJob(listSpiderJob);
+            final SpiderJob job = new SpiderJob();
+            listSpiderJob = job;
+            int timeout = sourceBean.getPlayTimeoutSeconds();
+            if (timeout <= 0) {
+                timeout = 20;
+            }
+            final int listTimeout = timeout;
+            httpPrepareThreadPool.execute(new Runnable() {
                 @Override
                 public void run() {
-                    ExecutorService executor = Executors.newSingleThreadExecutor();
-                    Future<String> future = executor.submit(new Callable<String>() {
+                    job.run(listTimeout, new SpiderJob.Task() {
                         @Override
-                        public String call() throws Exception {
+                        public String call() {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return "";
+                            }
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
                             return sp.categoryContent(id, "1", true, new HashMap<String, String>());
                         }
-                    });
-                    String json = null;
-                    try {
-                        json = future.get(sourceBean.getPlayTimeoutSeconds(), TimeUnit.SECONDS);
-//                        LOG.i("echo-getfoderList:"+json);
-                    } catch (Throwable ignored) {
-                        future.cancel(true);
-                    } finally {
-                        executor.shutdown();
-                        if (json != null) {
-                            json(listResult, json, sourceBean.getKey());
-                        } else {
-                            listResult.postValue(null);
+                    }, new SpiderJob.Callback() {
+                        @Override
+                        public void onResult(String json) {
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
+                            }
+                            if (json != null && json.length() > 0) {
+                                json(listResult, json, sourceBean.getKey());
+                            } else {
+                                listResult.postValue(null);
+                            }
                         }
-                    }
+
+                        @Override
+                        public void onTimeout() {
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
+                        }
+
+                        @Override
+                        public void onError(Throwable error) {
+                            LOG.e("echo--getFolderList-error--" + sourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
+                            if (requestSeq == listRequestSeq.get()) {
+                                listResult.postValue(null);
+                            }
+                        }
+                    });
                 }
             });
         } else if (type == 0 || type == 1) {
@@ -896,6 +991,9 @@ public class SourceViewModel extends ViewModel {
                         }
                     });
         } else if (type == 4) {
+            runOffMain(new Runnable() {
+                @Override
+                public void run() {
             String extend = getFixUrl(sourceBean.getExt());
             GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
                     .tag(sourceBean.getKey() + "_folder")
@@ -923,6 +1021,8 @@ public class SourceViewModel extends ViewModel {
                     listResult.postValue(null);
                 }
             });
+                }
+            });
         } else {
             listResult.postValue(null);
         }
@@ -933,49 +1033,71 @@ public class SourceViewModel extends ViewModel {
     }
 //    homeVideoContent
     void getHomeRecList(SourceBean sourceBean, ArrayList<String> ids, HomeRecCallback callback) {
+        if (sourceBean == null || callback == null) {
+            if (callback != null) {
+                callback.done(null);
+            }
+            return;
+        }
         int type = sourceBean.getType();
         if (type == 3) {
-            Runnable waitResponse = new Runnable() {
+            final int requestSeq = sortRequestSeq.get();
+            final SpiderJob job = new SpiderJob();
+            sortSpiderJob = job;
+            httpPrepareThreadPool.execute(new Runnable() {
                 @Override
                 public void run() {
-                    ExecutorService executor = Executors.newSingleThreadExecutor();
-                    Future<String> future = executor.submit(new Callable<String>() {
+                    if (requestSeq != sortRequestSeq.get()) {
+                        callback.done(null);
+                        return;
+                    }
+                    job.run(20, new SpiderJob.Task() {
                         @Override
-                        public String call() throws Exception {
+                        public String call() {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return "";
+                            }
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
-                            String json = sp.homeVideoContent();
-//                            LOG.i("echo--getHomeRecList :" + json);
-                            return json;
+                            return sp.homeVideoContent();
                         }
-                    });
-                    String sortJson = null;
-                    try {
-                        sortJson = future.get(20, TimeUnit.SECONDS);
-                    } catch (TimeoutException e) {
-                        e.printStackTrace();
-                        future.cancel(true);
-                    } catch (InterruptedException | ExecutionException e) {
-                        e.printStackTrace();
-                    } finally {
-                        if (sortJson != null) {
+                    }, new SpiderJob.Callback() {
+                        @Override
+                        public void onResult(String sortJson) {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return;
+                            }
+                            if (sortJson == null || sortJson.length() == 0) {
+                                callback.done(null);
+                                return;
+                            }
                             AbsXml absXml = json(null, sortJson, sourceBean.getKey());
                             if (absXml != null && absXml.movie != null && absXml.movie.videoList != null) {
                                 callback.done(absXml.movie.videoList);
                             } else {
                                 callback.done(null);
                             }
-                        } else {
+                        }
+
+                        @Override
+                        public void onTimeout() {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return;
+                            }
+                            LOG.i("echo--getHomeRecList-timeout--" + sourceBean.getKey());
                             callback.done(null);
                         }
-                        try {
-                            executor.shutdown();
-                        } catch (Throwable th) {
-                            th.printStackTrace();
+
+                        @Override
+                        public void onError(Throwable error) {
+                            if (requestSeq != sortRequestSeq.get()) {
+                                return;
+                            }
+                            LOG.e("echo--getHomeRecList-error--" + sourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
+                            callback.done(null);
                         }
-                    }
+                    });
                 }
-            };
-            spThreadPool.execute(waitResponse);
+            });
         } else if (type == 0 || type == 1) {
             OkGo.<String>get(sourceBean.getApi())
                     .tag("detail")
@@ -1026,9 +1148,15 @@ public class SourceViewModel extends ViewModel {
 
     public void getDetail(String sourceKey, String urlid, boolean fallback) {
         // 新详情开始前停掉上一轮，避免换源时旧的 detailContent 继续占连接。
+        sortRequestSeq.incrementAndGet();
+        listRequestSeq.incrementAndGet();
+        cancelBackgroundSpiderWork();
         final int requestSeq = detailRequestSeq.incrementAndGet();
         cancelDetailJob();
         OkGo.getInstance().cancelTag("detail");
+        if (urlid == null) {
+            urlid = "";
+        }
         if (urlid.startsWith("push://") && ApiConfig.get().getSource(PUSH_AGENT) != null) {
             String pushUrl = urlid.substring(7);
             if (pushUrl.startsWith("b64:")) {
@@ -1050,6 +1178,13 @@ public class SourceViewModel extends ViewModel {
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
         if (isPushFallback(sourceKey, sourceBean)) {
             detailResult.postValue(createPushDetail(urlid, sourceKey));
+            return;
+        }
+        if (sourceBean == null) {
+            LOG.i("echo--getDetail-source-null--" + sourceKey);
+            AbsXml data = new AbsXml();
+            data.sourceKey = sourceKey;
+            detailResult.postValue(data);
             return;
         }
         int type = sourceBean.getType();
@@ -1106,8 +1241,15 @@ public class SourceViewModel extends ViewModel {
                 }
             });
         } else if (type == 0 || type == 1|| type == 4) {
+            final boolean detailFallback = fallback;
+            runOffMain(new Runnable() {
+                @Override
+                public void run() {
+            if (requestSeq != detailRequestSeq.get()) {
+                return;
+            }
             String extend=sourceBean.getExt();
-            extend=fallback ? getFixUrl(extend, 6) : getFixUrl(extend);
+            extend=detailFallback ? getFixUrl(extend, 6) : getFixUrl(extend);
 
             GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
                     .tag("detail")
@@ -1146,6 +1288,8 @@ public class SourceViewModel extends ViewModel {
                             json(detailResult, "", sourceBean.getKey());
                         }
                     });
+                }
+            });
         } else {
             AbsXml data = new AbsXml();
             data.sourceKey = sourceKey;
@@ -1399,6 +1543,9 @@ public class SourceViewModel extends ViewModel {
     // playerContent
     public void getPlay(String sourceKey, String playFlag, String progressKey, String url, String subtitleKey) {
         // 先停掉上一轮。序号在取消之后再加，避免把这次新请求也标成过期。
+        sortRequestSeq.incrementAndGet();
+        listRequestSeq.incrementAndGet();
+        cancelBackgroundSpiderWork();
         cancelPlayRequest();
         final int requestSeq = playRequestSeq.incrementAndGet();
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
@@ -1407,6 +1554,11 @@ public class SourceViewModel extends ViewModel {
         String requestUrl = pushUrl.url;
         if (pushFallback) {
             postPlayResult(requestSeq, createPushPlayResult(url, pushUrl, progressKey, subtitleKey, playFlag));
+            return;
+        }
+        if (sourceBean == null) {
+            LOG.i("echo--getPlay-source-null--" + sourceKey);
+            postPlayResult(requestSeq, null);
             return;
         }
         int type = sourceBean.getType();
@@ -1485,6 +1637,12 @@ public class SourceViewModel extends ViewModel {
                 postPlayResult(requestSeq, null);
             }
         } else if (type == 4) {
+            runOffMain(new Runnable() {
+                @Override
+                public void run() {
+            if (requestSeq != playRequestSeq.get()) {
+                return;
+            }
             String extend=sourceBean.getExt();
             extend=getFixUrl(extend);
 
@@ -1531,6 +1689,8 @@ public class SourceViewModel extends ViewModel {
                         postPlayResult(requestSeq, null);
                     }
                 });
+                }
+            });
         }else {
             postPlayResult(requestSeq, null);
         }
@@ -1779,40 +1939,39 @@ public class SourceViewModel extends ViewModel {
         if (TextUtils.isEmpty(extend)) return "";
         if(!extend.startsWith("http"))return extend;
         final String key = MD5.string2MD5(extend);
-        if (extendCache.containsKey(key)) {
+        String cached = extendCache.get(key);
+        if (cached != null) {
             LOG.i("echo-getFixUrl Cache");
-            return extendCache.get(key);
+            return cached;
         }
-        Future<String> future = spThreadPool.submit(new Callable<String>() {
-            @Override
-            public String call() {
-                String result = extend;
-                if (extend.startsWith("http://127.0.0.1")) {
-                    String path = extend.replaceAll("^http.+/file/", FileUtils.getRootPath() + "/");
-                    path = path.replaceAll("localhost/", "/");
-                    result = FileUtils.readFileToString(path, "UTF-8");
-                    result = tryMinifyJson(result);
-                    extendCache.putIfAbsent(key, result);
-                } else if (extend.startsWith("http")) {
-                    result = OkHttp.string(extend, null);
-                    if (!result.isEmpty()) {
-                        result = tryMinifyJson(result);
-                        if(result.length()>2500)result = extend;
-                        extendCache.putIfAbsent(key, result);
-                    }
-                }
-                return result;
-            }
-        });
-
+        // 调用方必须已经离开主线程。这里直接请求，不再丢进播放那条单线程里等待。
         try {
-            return future.get(timeoutSeconds, TimeUnit.SECONDS);
-        } catch (TimeoutException te) {
-            te.printStackTrace();
-            future.cancel(true);
-            return extend;
-        } catch (Exception e) {
-            e.printStackTrace();
+            String result = extend;
+            if (extend.startsWith("http://127.0.0.1")) {
+                String path = extend.replaceAll("^http.+/file/", FileUtils.getRootPath() + "/");
+                path = path.replaceAll("localhost/", "/");
+                result = FileUtils.readFileToString(path, "UTF-8");
+                if (result == null) {
+                    result = "";
+                }
+                result = tryMinifyJson(result);
+                extendCache.putIfAbsent(key, result);
+            } else if (extend.startsWith("http")) {
+                long timeoutMs = timeoutSeconds > 0 ? timeoutSeconds * 1000L : 20000L;
+                result = OkHttp.string(extend, timeoutMs);
+                if (result != null && !result.isEmpty()) {
+                    result = tryMinifyJson(result);
+                    if (result.length() > 2500) {
+                        result = extend;
+                    }
+                    extendCache.putIfAbsent(key, result);
+                } else {
+                    result = extend;
+                }
+            }
+            return result == null ? extend : result;
+        } catch (RuntimeException ex) {
+            LOG.e("echo-getFixUrl-failed: " + ex.getMessage());
             return extend;
         }
     }
@@ -2250,33 +2409,7 @@ public class SourceViewModel extends ViewModel {
     }
 
     private String getFixUrlDirect(final String extend) {
-        if (TextUtils.isEmpty(extend)) return "";
-        if (!extend.startsWith("http")) return extend;
-        final String key = MD5.string2MD5(extend);
-        if (extendCache.containsKey(key)) {
-            return extendCache.get(key);
-        }
-        String result = extend;
-        try {
-            if (extend.startsWith("http://127.0.0.1")) {
-                String path = extend.replaceAll("^http.+/file/", FileUtils.getRootPath() + "/");
-                path = path.replaceAll("localhost/", "/");
-                result = FileUtils.readFileToString(path, "UTF-8");
-                result = tryMinifyJson(result);
-                extendCache.putIfAbsent(key, result);
-            } else {
-                result = OkHttp.string(extend, null);
-                if (!TextUtils.isEmpty(result)) {
-                    result = tryMinifyJson(result);
-                    if (result.length() > 2500) result = extend;
-                    extendCache.putIfAbsent(key, result);
-                }
-            }
-        } catch (Throwable th) {
-            th.printStackTrace();
-            return extend;
-        }
-        return result;
+        return getFixUrl(extend, 30);
     }
 
     private void postEmptySearchResult(MutableLiveData<AbsXml> result, String sourceKey) {

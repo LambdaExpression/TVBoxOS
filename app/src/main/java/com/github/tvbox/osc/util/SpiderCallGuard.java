@@ -12,6 +12,7 @@ import okhttp3.Response;
 /**
  * 按爬虫调用线程标记 OkHttp 请求，只取消这一轮，不影响图片、配置等其它请求。
  * JAR 爬虫走共用客户端且没有 tag，只能在发起线程上登记 Call。
+ * JAR 里自己 new OkHttpClient() 的请求不经过这里，取消不到。
  */
 public final class SpiderCallGuard {
 

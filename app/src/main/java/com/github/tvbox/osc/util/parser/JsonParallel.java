@@ -31,7 +31,12 @@ public class JsonParallel {
     public static JSONObject parse(LinkedHashMap<String, String> jx, String url) {
         try {
             if (jx != null && jx.size() > 0) {
-                client = new OkHttpClient();
+                // 单独的连接池，cancelAll 只停这一轮解析。
+                // 挂上爬虫拦截器后，从爬虫线程发起的解析请求能被切源取消。
+                // 不能直接用共用客户端：这里的 cancelAll 会把图片和配置请求一起掐掉。
+                client = new OkHttpClient.Builder()
+                        .addInterceptor(com.github.tvbox.osc.util.SpiderCallGuard.interceptor())
+                        .build();
                 // 使用线程池并发处理任务
                 executorService = Executors.newFixedThreadPool(5);
                 CompletionService<JSONObject> completionService = new ExecutorCompletionService<>(executorService);

@@ -190,6 +190,17 @@ public class ApiConfig {
         }
         return configUrl;
     }
+
+    /**
+     * 拉取点播配置。冷启动会先用上次缓存，再在后台换成新的。
+     *
+     * @param useCache true 时只用本地缓存，设置页返回走这条
+     * @param callback 成功、失败，以及缓存已经显示后的更新
+     */
+    public void loadConfig(boolean useCache, LoadConfigCallback callback) {
+        loadConfig(useCache, callback, null);
+    }
+
     public void loadConfig(boolean useCache, LoadConfigCallback callback, Activity activity) {
         String apiUrl = Hawk.get(HawkConfig.API_URL, "");
         if (apiUrl.isEmpty()) {
@@ -197,7 +208,8 @@ public class ApiConfig {
             return;
         }
         File cache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/" + MD5.encode(apiUrl));
-        if (useCache && cache.exists()) {
+        boolean parsedCache = false;
+        if (cache.exists()) {
             try {
                 String json = readConfigFile(cache);
                 if (switchApiCollectionIfNeeded(apiUrl, json)) {
@@ -207,17 +219,34 @@ public class ApiConfig {
                 clearApiLinesIfUnmatched(apiUrl);
                 parseJson(apiUrl, json);
                 callback.success();
-                return;
+                parsedCache = true;
+                // 从设置返回时沿用这次缓存，不再打网络。冷启动先显示，再在下面刷新。
+                if (useCache) {
+                    return;
+                }
             } catch (Throwable th) {
                 LOG.e("echo-config-cache-parse: " + th.getMessage());
             }
         }
+        final boolean showedCache = parsedCache;
         String configUrl = configUrl(apiUrl);
         final String configKey = TempKey;
         fetchConfigAsync(apiUrl, configUrl, configKey, new ConfigFetchCallback() {
             @Override
             public void success(String json) {
                 try {
+                    if (json == null) {
+                        if (!showedCache) {
+                            callback.error("配置内容为空");
+                        }
+                        return;
+                    }
+                    if (showedCache) {
+                        String cached = readConfigFile(cache);
+                        if (json.equals(cached)) {
+                            return;
+                        }
+                    }
                     if (switchApiCollectionIfNeeded(apiUrl, json)) {
                         FileUtils.saveCache(cache, json);
                         loadConfig(false, callback, activity);
@@ -226,15 +255,25 @@ public class ApiConfig {
                     clearApiLinesIfUnmatched(apiUrl);
                     parseJson(apiUrl, json);
                     FileUtils.saveCache(cache, json);
-                    callback.success();
+                    if (showedCache) {
+                        callback.updated();
+                    } else {
+                        callback.success();
+                    }
                 } catch (Throwable th) {
                     LOG.e("echo-config-parse: " + th.getMessage());
-                    callback.error("配置解析失败");
+                    if (!showedCache) {
+                        callback.error("配置解析失败");
+                    }
                 }
             }
 
             @Override
             public void error(String error) {
+                if (showedCache) {
+                    LOG.e("echo-config-refresh-failed: " + error);
+                    return;
+                }
                 if (cache.exists()) {
                     try {
                         String json = readConfigFile(cache);
@@ -376,7 +415,17 @@ public class ApiConfig {
     private static final int LOAD_JAR_MAX_RETRY = 1;
 
     public void loadJar(boolean useCache, String spider, LoadConfigCallback callback) {
-        loadJar(useCache, spider, callback, 0);
+        loadJar(useCache, spider, callback, 0, null);
+    }
+
+    /**
+     * 加载爬虫包。传入当前界面后，本地已有文件会先加载并回调成功，校验不对再后台更新。
+     * 界面不在前台时只把新包落盘，不替换正在使用的加载器，避免播放中途把爬虫换掉。
+     *
+     * @param activity 发起加载的界面，没有就保持原来的等下载完成再成功
+     */
+    public void loadJar(boolean useCache, String spider, LoadConfigCallback callback, Activity activity) {
+        loadJar(useCache, spider, callback, 0, activity);
     }
 
     private interface JarLoadCallback {
@@ -551,11 +600,80 @@ public class ApiConfig {
         }
     }
 
-    private void loadJar(boolean useCache, String spider, LoadConfigCallback callback, int retryCount) {
+    private void loadJar(boolean useCache, String spider, LoadConfigCallback callback, int retryCount, final Activity activity) {
+        if (spider == null || spider.trim().isEmpty()) {
+            callback.error("爬虫地址为空");
+            return;
+        }
         String[] urls = spider.split(";md5;");
         String jarUrl = urls[0];
         String md5 = urls.length > 1 ? urls[1].trim() : "";
         File cache = new File(App.getInstance().getFilesDir().getAbsolutePath() + "/csp/"+MD5.string2MD5(jarUrl)+".jar");
+        // 冷启动时本地包先用起来。校验留到后台，避免首页干等下载。
+        if (retryCount == 0 && cache.isFile() && cache.length() > 0) {
+            final String refreshUrl = jarUrl;
+            jarLoadExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    String fileMd5 = md5.isEmpty() ? "" : MD5.getFileMd5(cache);
+                    boolean md5Match = !md5.isEmpty() && fileMd5 != null && fileMd5.equalsIgnoreCase(md5);
+                    boolean weekFresh = md5.isEmpty() && Boolean.parseBoolean(jarCache) && !FileUtils.isWeekAgo(cache);
+                    boolean trusted = useCache || md5Match || weekFresh;
+                    boolean loaded = false;
+                    try {
+                        loaded = jarLoader.load(cache.getAbsolutePath());
+                    } catch (Throwable th) {
+                        LOG.e("echo-jar-cache-load: " + th.getMessage());
+                    }
+                    if (!loaded) {
+                        if (!cache.delete()) {
+                            LOG.i("echo-jar-delete-bad-cache:" + cache.getAbsolutePath());
+                        }
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                loadJar(false, spider, callback, 1, activity);
+                            }
+                        });
+                        return;
+                    }
+                    mainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.success();
+                            if (trusted) {
+                                return;
+                            }
+                            if (activity != null && (activity.isFinishing() || !activity.hasWindowFocus())) {
+                                LOG.i("echo-jar-refresh-deferred:" + refreshUrl);
+                                return;
+                            }
+                            LOG.i("echo-jar-refresh-background:" + refreshUrl);
+                            loadJar(false, spider, new LoadConfigCallback() {
+                                @Override
+                                public void success() {
+                                    callback.updated();
+                                }
+
+                                @Override
+                                public void error(String msg) {
+                                    LOG.e("echo-jar-refresh-failed: " + msg);
+                                }
+
+                                @Override
+                                public void notice(String msg) {
+                                }
+
+                                @Override
+                                public void updated() {
+                                }
+                            }, 1, activity);
+                        }
+                    });
+                }
+            });
+            return;
+        }
 
         if (!md5.isEmpty() || useCache) {
             if (cache.exists() && (useCache || MD5.getFileMd5(cache).equalsIgnoreCase(md5))) {
@@ -589,7 +707,7 @@ public class ApiConfig {
                             if (success) {
                                 callback.success();
                             } else {
-                                loadJar(false, spider, callback, retryCount);
+                                loadJar(false, spider, callback, retryCount, activity);
                             }
                         }
                     });
@@ -613,7 +731,7 @@ public class ApiConfig {
                     LOG.i("echo---delete bad jar cache failed:" + cache.getAbsolutePath());
                 }
                 LOG.i("echo---retry load jar reason:" + reason + " url:" + requestUrl + " retry:" + (retryCount + 1));
-                loadJar(false, spider, callback, retryCount+1);
+                loadJar(false, spider, callback, retryCount+1, activity);
                 return true;
             }
 
@@ -1703,6 +1821,12 @@ public class ApiConfig {
 
         void error(String msg);
         void notice(String msg);
+
+        /**
+         * 已经把缓存交给界面之后，新的配置或爬虫包到了。
+         * 拉取失败不会走这里，界面继续用已经显示的内容。
+         */
+        void updated();
     }
 
     public interface FastParseCallback {

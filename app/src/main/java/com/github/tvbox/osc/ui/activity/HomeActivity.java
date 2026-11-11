@@ -415,6 +415,10 @@ public class HomeActivity extends BaseActivity {
     private boolean dataInitOk = false;
     private boolean jarInitOk = false;
     private boolean searchSpiderWarmStarted = false;
+    /** 配置在显示缓存后又被刷新时递增，丢掉过期的 initData。 */
+    private int configEpoch = 0;
+    /** 当前已经拿来加载爬虫包的地址。配置刷新后地址变了才重新加载。 */
+    private String shownSpider = "";
     private TipDialog mConfigErrorDialog;
 
     private void initData() {
@@ -435,11 +439,18 @@ public class HomeActivity extends BaseActivity {
         tvNameAnimation();
         showLoading();
         if (dataInitOk && !jarInitOk) {
-            if (!ApiConfig.get().getSpider().isEmpty()) {
-                ApiConfig.get().loadJar(useCacheConfig, ApiConfig.get().getSpider(), new ApiConfig.LoadConfigCallback() {
+            String spiderNow = ApiConfig.get().getSpider();
+            if (spiderNow != null && !spiderNow.isEmpty()) {
+                final String loadingSpider = spiderNow;
+                ApiConfig.get().loadJar(useCacheConfig, loadingSpider, new ApiConfig.LoadConfigCallback() {
                     @Override
                     public void success() {
+                        // 配置已经换成另一份爬虫时，这一轮的成功不能把首页提前放出来。
+                        if (!loadingSpider.equals(ApiConfig.get().getSpider())) {
+                            return;
+                        }
                         jarInitOk = true;
+                        shownSpider = loadingSpider;
                         mHandler.postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -447,6 +458,18 @@ public class HomeActivity extends BaseActivity {
                                 initData();
                             }
                         }, 50);
+                    }
+
+                    @Override
+                    public void updated() {
+                        if (isActivityUnavailable() || !hasWindowFocus()) {
+                            return;
+                        }
+                        if (!loadingSpider.equals(ApiConfig.get().getSpider())) {
+                            return;
+                        }
+                        shownSpider = loadingSpider;
+                        loadHomeSort(true);
                     }
 
                     @Override
@@ -461,6 +484,9 @@ public class HomeActivity extends BaseActivity {
 
                     @Override
                     public void error(String msg) {
+                        if (!loadingSpider.equals(ApiConfig.get().getSpider())) {
+                            return;
+                        }
                         jarInitOk = true;
                         dataInitOk = true;
                         mHandler.postDelayed(new Runnable() {
@@ -471,7 +497,7 @@ public class HomeActivity extends BaseActivity {
                             }
                         },50);
                     }
-                });
+                }, this);
             }
             return;
         }
@@ -491,13 +517,41 @@ public class HomeActivity extends BaseActivity {
                 dataInitOk = true;
                 if (ApiConfig.get().getSpider().isEmpty()) {
                     jarInitOk = true;
+                    shownSpider = "";
                 }
+                final int epoch = configEpoch;
                 mHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
+                        if (epoch != configEpoch || isActivityUnavailable()) {
+                            return;
+                        }
                         initData();
                     }
                 }, 50);
+            }
+
+            @Override
+            public void updated() {
+                if (isActivityUnavailable()) {
+                    return;
+                }
+                configEpoch++;
+                String spider = ApiConfig.get().getSpider();
+                if (spider == null) {
+                    spider = "";
+                }
+                if (!spider.equals(shownSpider)) {
+                    jarInitOk = false;
+                    dataInitOk = true;
+                    initData();
+                    return;
+                }
+                // 爬虫包还没进首页，等它成功后再拉。这里再拉会用到还没加载的包。
+                if (!jarInitOk) {
+                    return;
+                }
+                loadHomeSort(true);
             }
 
             @Override

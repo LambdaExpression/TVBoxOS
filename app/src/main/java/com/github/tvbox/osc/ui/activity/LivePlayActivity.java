@@ -2747,6 +2747,10 @@ public class LivePlayActivity extends BaseActivity {
                             }
                         });
                     }
+
+                    @Override
+                    public void updated() {
+                    }
                 });
                 break;
             }
@@ -2854,6 +2858,10 @@ public class LivePlayActivity extends BaseActivity {
                         Toast.makeText(LivePlayActivity.this, msg, Toast.LENGTH_SHORT).show();
                     }
                 });
+            }
+
+            @Override
+            public void updated() {
             }
         });
     }
