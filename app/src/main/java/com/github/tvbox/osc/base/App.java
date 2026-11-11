@@ -71,6 +71,10 @@ public class App extends MultiDexApplication {
         } else if (Hawk.get(HawkConfig.PLAY_TYPE, 2) == 0) {
             Hawk.put(HawkConfig.PLAY_TYPE, 2);
         }
+        // 只在从未写入过配置地址时落默认订阅，避免覆盖用户后来保存的地址或清空操作。
+        if (!Hawk.contains(HawkConfig.API_URL)) {
+            Hawk.put(HawkConfig.API_URL, HawkConfig.DEFAULT_API_URL);
+        }
     }
 
     public static App getInstance() {

@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: 去掉 Windows 上的 Python 路径
+        run: |
+          # pyramid 里写死了本机路径。Chaquopy 在配置阶段就会读它，不删掉的话六个口味都配不过。
+          sed -i '/buildPython.*python.exe/d' pyramid/build.gradle
+
+      - name: 安装 Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: 准备 Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 确认 Android SDK
+        run: |
+          if [ -z "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ]; then
+            echo "运行器上没有 Android SDK"
+            exit 1
+          fi
+
+      - name: 写入签名
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$RELEASE_KEYSTORE_BASE64" ] || missing="$missing RELEASE_KEYSTORE_BASE64"
+          [ -n "$RELEASE_STORE_PASSWORD" ] || missing="$missing RELEASE_STORE_PASSWORD"
+          [ -n "$RELEASE_KEY_ALIAS" ] || missing="$missing RELEASE_KEY_ALIAS"
+          [ -n "$RELEASE_KEY_PASSWORD" ] || missing="$missing RELEASE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "缺少 GitHub Secret:$missing"
+            exit 1
+          fi
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\n\r' | base64 -d > app/release.jks
+          if [ ! -s app/release.jks ]; then
+            echo "签名文件解码后是空的"
+            exit 1
+          fi
+
+      - name: 生成版本号
+        id: meta
+        run: |
+          tag="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)-${GITHUB_SHA::7}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "提交：${GITHUB_SHA}"
+            echo
+            echo "说明："
+            git log -1 --pretty=%B
+          } > release-notes.txt
+
+      - name: 打包六个口味
+        env:
+          RELEASE_STORE_FILE: ${{ github.workspace }}/app/release.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --build-cache --max-workers=2 --no-daemon \
+            -PVERSION_NAME="${{ steps.meta.outputs.tag }}" \
+            -PVERSION_CODE="${{ github.run_number }}"
+          mapfile -t apks < <(find app/build/outputs/apk -type f -name 'TVBox_release-*.apk' | sort)
+          printf '%s\n' "${apks[@]}"
+          if [ "${#apks[@]}" -ne 6 ]; then
+            echo "期望 6 个 apk，实际 ${#apks[@]}"
+            exit 1
+          fi
+
+      - name: 发布到 Releases
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          commit: ${{ github.sha }}
+          bodyFile: release-notes.txt
+          artifacts: app/build/outputs/apk/**/TVBox_release-*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}

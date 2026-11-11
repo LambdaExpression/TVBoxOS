@@ -300,6 +300,16 @@ public class OkGoHelper {
         return defaultClient;
     }
 
+    /**
+     * 让 JAR 爬虫在共用客户端上发出的请求能按线程被取消。
+     * 放在日志拦截器前面，取消时不再把失败请求打成正常日志。
+     *
+     * @param builder 正在组装的客户端
+     */
+    private static void addSpiderCallGuard(OkHttpClient.Builder builder) {
+        builder.addInterceptor(SpiderCallGuard.interceptor());
+    }
+
     public static OkHttpClient getNoRedirectClient() {
         return noRedirectClient;
     }
@@ -324,6 +334,7 @@ public class OkGoHelper {
 
         //builder.retryOnConnectionFailure(false);
 
+        addSpiderCallGuard(builder);
         builder.addInterceptor(loggingInterceptor);
 
         builder.readTimeout(DEFAULT_MILLISECONDS, TimeUnit.MILLISECONDS);
@@ -368,6 +379,7 @@ public class OkGoHelper {
             loggingInterceptor.setColorLevel(Level.OFF);
         }
 
+        addSpiderCallGuard(builder);
         builder.addInterceptor(loggingInterceptor);
 
         builder.readTimeout(DEFAULT_MILLISECONDS, TimeUnit.MILLISECONDS);

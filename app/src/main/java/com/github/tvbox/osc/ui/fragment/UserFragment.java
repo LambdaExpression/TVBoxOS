@@ -3,6 +3,7 @@ package com.github.tvbox.osc.ui.fragment;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.View;
 import android.view.animation.BounceInterpolator;
 import android.widget.LinearLayout;
@@ -33,6 +34,7 @@ import com.github.tvbox.osc.ui.adapter.HomeHotVodAdapter;
 import com.github.tvbox.osc.util.FastClickCheckUtil;
 import com.github.tvbox.osc.util.HawkConfig;
 import com.github.tvbox.osc.util.ImgUtil;
+import com.github.tvbox.osc.util.LOG;
 import com.github.tvbox.osc.util.UA;
 import com.github.tvbox.osc.viewmodel.SourceViewModel;
 import com.google.gson.Gson;
@@ -285,72 +287,131 @@ public class UserFragment extends BaseLazyFragment implements View.OnClickListen
         setDouBanData(adapter);
     }
 
+    /**
+     * 先画出上次的豆瓣热播，再请求新的一份。请求失败时保留已经显示的缓存。
+     */
     private void setDouBanData(HomeHotVodAdapter adapter) {
+        if (adapter == null) {
+            return;
+        }
         try {
             Calendar cal = Calendar.getInstance();
             int year = cal.get(Calendar.YEAR);
             int month = cal.get(Calendar.MONTH) + 1;
             int day = cal.get(Calendar.DATE);
             String today = String.format("%d%d%d", year, month, day);
-            String requestDay = Hawk.get("home_hot_day", "");
-            if (requestDay.equals(today)) {
-                String json = Hawk.get("home_hot", "");
-                if (!json.isEmpty()) {
-                    ArrayList<Movie.Video> hotMovies = loadHots(json);
-                    if (hotMovies != null && hotMovies.size() > 0) {
-                        adapter.setNewData(hotMovies);
-                        return;
-                    }
+            String cachedJson = Hawk.get(HawkConfig.HOME_HOT_CACHE, "");
+            final String cachedSnapshot = cachedJson == null ? "" : cachedJson;
+            boolean shownCache = false;
+            if (!TextUtils.isEmpty(cachedSnapshot)) {
+                ArrayList<Movie.Video> hotMovies = loadHots(cachedSnapshot);
+                if (!hotMovies.isEmpty()) {
+                    adapter.setNewData(hotMovies);
+                    shownCache = true;
                 }
             }
+            final boolean hadCache = shownCache;
             String doubanUrl = "https://movie.douban.com/j/new_search_subjects?sort=U&range=0,10&tags=&playable=1&start=0&year_range=" + year + "," + year;
+            OkGo.getInstance().cancelTag("home_douban");
             OkGo.<String>get(doubanUrl)
+                    .tag("home_douban")
                     .headers("User-Agent", UA.randomOne())
                     .execute(new AbsCallback<String>() {
                         @Override
                         public void onSuccess(Response<String> response) {
-                            String netJson = response.body();
-                            Hawk.put("home_hot_day", today);
-                            Hawk.put("home_hot", netJson);
+                            String netJson = response == null ? "" : response.body();
+                            if (TextUtils.isEmpty(netJson)) {
+                                LOG.e("echo-douban-refresh-empty");
+                                return;
+                            }
+                            if (netJson.equals(cachedSnapshot)) {
+                                Hawk.put(HawkConfig.HOME_HOT_DAY, today);
+                                return;
+                            }
+                            ArrayList<Movie.Video> movies = loadHots(netJson);
+                            if (movies.isEmpty()) {
+                                LOG.e("echo-douban-parse-empty");
+                                return;
+                            }
+                            Hawk.put(HawkConfig.HOME_HOT_CACHE, netJson);
+                            Hawk.put(HawkConfig.HOME_HOT_DAY, today);
+                            if (mActivity == null || mActivity.isFinishing()) {
+                                return;
+                            }
                             mActivity.runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
-                                    adapter.setNewData(loadHots(netJson));
+                                    if (homeHotVodAdapter != null) {
+                                        homeHotVodAdapter.setNewData(movies);
+                                    }
                                 }
                             });
                         }
 
                         @Override
+                        public void onError(Response<String> response) {
+                            Throwable error = response == null ? null : response.getException();
+                            LOG.e("echo-douban-refresh-failed: " + (error == null ? "" : error.getMessage()));
+                            if (!hadCache && mActivity != null && !mActivity.isFinishing()) {
+                                mActivity.runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        Toast.makeText(mActivity, "豆瓣热播加载失败", Toast.LENGTH_SHORT).show();
+                                    }
+                                });
+                            }
+                        }
+
+                        @Override
                         public String convertResponse(okhttp3.Response response) throws Throwable {
+                            if (response == null || response.body() == null) {
+                                return "";
+                            }
                             return response.body().string();
                         }
                     });
         } catch (Throwable th) {
-            th.printStackTrace();
+            LOG.e("echo-douban-load: " + th.getMessage());
         }
     }
 
+    /**
+     * 把豆瓣热播 JSON 转成首页片子。缺字段的条目跳过，不让一条坏数据弄丢整份列表。
+     */
     private ArrayList<Movie.Video> loadHots(String json) {
         ArrayList<Movie.Video> result = new ArrayList<>();
+        if (TextUtils.isEmpty(json)) {
+            return result;
+        }
         try {
             JsonObject infoJson = new Gson().fromJson(json, JsonObject.class);
+            if (infoJson == null || !infoJson.has("data") || !infoJson.get("data").isJsonArray()) {
+                LOG.e("echo-douban-parse: missing data");
+                return result;
+            }
             JsonArray array = infoJson.getAsJsonArray("data");
             int limit = Math.min(array.size(), 25);
-            for (int i = 0; i < limit; i++) {  // 改用索引循环
+            for (int i = 0; i < limit; i++) {
                 JsonElement ele = array.get(i);
+                if (ele == null || !ele.isJsonObject()) {
+                    continue;
+                }
                 JsonObject obj = ele.getAsJsonObject();
+                if (!obj.has("title") || obj.get("title").isJsonNull()) {
+                    continue;
+                }
                 Movie.Video vod = new Movie.Video();
                 vod.name = obj.get("title").getAsString();
-                vod.note = obj.get("rate").getAsString();
+                vod.note = obj.has("rate") && !obj.get("rate").isJsonNull() ? obj.get("rate").getAsString() : "";
                 if (!vod.note.isEmpty()) vod.note += " 分";
-                vod.pic = obj.get("cover").getAsString()
-                        + "@User-Agent=" + UA.randomOne()
-                        + "@Referer=https://www.douban.com/";
-
+                String cover = obj.has("cover") && !obj.get("cover").isJsonNull() ? obj.get("cover").getAsString() : "";
+                if (!TextUtils.isEmpty(cover)) {
+                    vod.pic = cover + "@User-Agent=" + UA.randomOne() + "@Referer=https://www.douban.com/";
+                }
                 result.add(vod);
             }
         } catch (Throwable th) {
-
+            LOG.e("echo-douban-parse: " + th.getMessage());
         }
         return result;
     }

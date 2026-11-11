@@ -209,29 +209,26 @@ public class ApiConfig {
                 callback.success();
                 return;
             } catch (Throwable th) {
-                th.printStackTrace();
+                LOG.e("echo-config-cache-parse: " + th.getMessage());
             }
         }
-        String configUrl=configUrl(apiUrl);
-
+        String configUrl = configUrl(apiUrl);
         final String configKey = TempKey;
-
         fetchConfigAsync(apiUrl, configUrl, configKey, new ConfigFetchCallback() {
             @Override
             public void success(String json) {
                 try {
-//                            LOG.longI("echo-ConfigJson", json);
                     if (switchApiCollectionIfNeeded(apiUrl, json)) {
-                        FileUtils.saveCache(cache,json);
+                        FileUtils.saveCache(cache, json);
                         loadConfig(false, callback, activity);
                         return;
                     }
                     clearApiLinesIfUnmatched(apiUrl);
                     parseJson(apiUrl, json);
-                    FileUtils.saveCache(cache,json);
+                    FileUtils.saveCache(cache, json);
                     callback.success();
                 } catch (Throwable th) {
-                    th.printStackTrace();
+                    LOG.e("echo-config-parse: " + th.getMessage());
                     callback.error("配置解析失败");
                 }
             }
@@ -250,12 +247,41 @@ public class ApiConfig {
                         callback.success();
                         return;
                     } catch (Throwable th) {
-                        th.printStackTrace();
+                        LOG.e("echo-config-cache-parse: " + th.getMessage());
                     }
                 }
                 callback.error("拉取配置失败\n" + error);
             }
         });
+    }
+
+    /**
+     * 去掉整行 // 注释。默认订阅在站点之间夹了注释，Gson 不能直接解析。
+     *
+     * @param json 配置正文
+     * @return 去掉整行注释后的文本
+     */
+    private String stripJsonLineComments(String json) {
+        if (TextUtils.isEmpty(json) || json.indexOf("//") < 0) {
+            return json == null ? "" : json;
+        }
+        StringBuilder builder = new StringBuilder(json.length());
+        int start = 0;
+        while (start < json.length()) {
+            int end = json.indexOf('\n', start);
+            if (end < 0) {
+                end = json.length();
+            }
+            String line = json.substring(start, end);
+            if (!line.trim().startsWith("//")) {
+                builder.append(line);
+                if (end < json.length()) {
+                    builder.append('\n');
+                }
+            }
+            start = end + 1;
+        }
+        return builder.toString();
     }
 
     public void loadLiveConfig(boolean useCache, LoadConfigCallback callback) {
@@ -671,7 +697,7 @@ public class ApiConfig {
     private ArrayList<String> parseApiCollection(String jsonStr) {
         ArrayList<String> apiLines = new ArrayList<>();
         try {
-            String json = trimJsonObject(jsonStr);
+            String json = trimJsonObject(stripJsonLineComments(jsonStr));
             if (TextUtils.isEmpty(json)) {
                 return apiLines;
             }
@@ -741,7 +767,11 @@ public class ApiConfig {
     private static  String jarCache ="true";
     private void parseJson(String apiUrl, String jsonStr) {
         resetConfigData();
+        jsonStr = stripJsonLineComments(jsonStr);
         JsonObject infoJson = gson.fromJson(jsonStr, JsonObject.class);
+        if (infoJson == null) {
+            throw new IllegalArgumentException("配置内容为空");
+        }
         // spider
         spider = DefaultConfig.safeJsonString(infoJson, "spider", "");
         jarCache = DefaultConfig.safeJsonString(infoJson, "jarCache", "true");

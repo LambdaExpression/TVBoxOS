@@ -316,6 +316,10 @@ public class HomeActivity extends BaseActivity {
 
 
     private boolean skipNextUpdate = false;
+    /** 缓存已经先显示，还在等这一轮网络结果。 */
+    private boolean homeSortAwaitingRefresh = false;
+    /** 当前已经画出来的分类和推荐，内容没变就不再重建页面。 */
+    private String shownHomeSortSign = "";
 
     private void initViewModel() {
         sourceViewModel = new ViewModelProvider(this).get(SourceViewModel.class);
@@ -326,10 +330,21 @@ public class HomeActivity extends BaseActivity {
                     skipNextUpdate = false;
                     return;
                 }
-                if (!homeSortLoading && loadingSourceKey == null) {
+                if (absXml != null && absXml.keepCurrent) {
+                    if (loadingSourceKey == null || absXml.sourceKey == null || loadingSourceKey.equals(absXml.sourceKey)) {
+                        finishHomeSortRefresh();
+                    }
+                    return;
+                }
+                if (!homeSortLoading && !homeSortAwaitingRefresh) {
                     return;
                 }
                 if (absXml != null && absXml.sourceKey != null && loadingSourceKey != null && !loadingSourceKey.equals(absXml.sourceKey)) {
+                    return;
+                }
+                String sign = homeSortSign(absXml);
+                if (homeSortAwaitingRefresh && absXml != null && !absXml.fromCache && sign.equals(shownHomeSortSign)) {
+                    finishHomeSortRefresh();
                     return;
                 }
                 SourceBean home = ApiConfig.get().getHomeSourceBean();
@@ -346,12 +361,55 @@ public class HomeActivity extends BaseActivity {
                 updateHomeRec(absXml);
                 if (home != null && home.getName() != null && !home.getName().isEmpty()) tvName.setText(home.getName());
                 tvName.clearAnimation();
-                homeSortLoading = false;
-                loadingSourceKey = null;
+                shownHomeSortSign = sign;
                 previousHomeName = null;
                 previousHomeSource = null;
+                if (absXml != null && absXml.fromCache) {
+                    homeSortAwaitingRefresh = true;
+                    homeSortLoading = false;
+                    return;
+                }
+                finishHomeSortRefresh();
             }
         });
+    }
+
+    /** 这一轮首页刷新结束，不再接收同一次请求的后续结果。 */
+    private void finishHomeSortRefresh() {
+        homeSortAwaitingRefresh = false;
+        homeSortLoading = false;
+        loadingSourceKey = null;
+    }
+
+    /**
+     * 用分类和推荐片单拼一个比较串。网络结果和当前画面一致时不重建。
+     */
+    private String homeSortSign(AbsSortXml absXml) {
+        if (absXml == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        if (absXml.classes != null && absXml.classes.sortList != null) {
+            for (MovieSort.SortData sort : absXml.classes.sortList) {
+                if (sort == null) {
+                    continue;
+                }
+                builder.append(sort.id).append('\u0001').append(sort.name).append('\n');
+            }
+        }
+        builder.append('|');
+        if (absXml.videoList != null) {
+            for (Movie.Video video : absXml.videoList) {
+                if (video == null) {
+                    continue;
+                }
+                builder.append(video.id).append('\u0001')
+                        .append(video.name).append('\u0001')
+                        .append(video.pic).append('\u0001')
+                        .append(video.note).append('\n');
+            }
+        }
+        return builder.toString();
     }
 
     private boolean dataInitOk = false;
@@ -973,8 +1031,12 @@ public class HomeActivity extends BaseActivity {
     }
 
     private void cancelHomeSortLoading() {
+        homeSortAwaitingRefresh = false;
         homeSortLoading = false;
         loadingSourceKey = null;
+        if (sourceViewModel != null) {
+            sourceViewModel.cancelSortRequest();
+        }
         tvName.clearAnimation();
         if (previousHomeSource != null) {
             ApiConfig.get().setSourceBean(previousHomeSource);

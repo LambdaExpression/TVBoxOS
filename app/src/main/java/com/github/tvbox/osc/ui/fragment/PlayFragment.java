@@ -1551,8 +1551,18 @@ public class PlayFragment extends BaseLazyFragment {
         super.onHiddenChanged(hidden);
     }
 
+    /**
+     * 停掉还没返回的播放地址请求。播放器 release 不会断开爬虫自己的 HTTP。
+     */
+    public void cancelPendingLoad() {
+        if (sourceViewModel != null) {
+            sourceViewModel.cancelPlayRequest();
+        }
+    }
+
     @Override
     public void onDestroyView() {
+        cancelPendingLoad();
         audioPlayback = false;
         switchingPlayback = false;
         MusicPlaybackService.stop(getContext(), this);
@@ -2233,6 +2243,7 @@ public class PlayFragment extends BaseLazyFragment {
     }
 
     public void pauseForHidden() {
+        cancelPendingLoad();
         cancelPlayTimeout();
         stopParse();
         playbackStarted = false;

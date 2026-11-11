@@ -7,6 +7,8 @@ package com.github.tvbox.osc.util;
  */
 public class HawkConfig {
     public static final String API_URL = "api_url";
+    /** 未手动保存过配置地址时使用的订阅地址。用户一旦保存（含清空），不再回写。 */
+    public static final String DEFAULT_API_URL = "http://www.饭太硬.cc/tv";
     public static final String EPG_URL = "epg_url";
     public static final String SHOW_PREVIEW = "show_preview";
     public static final String API_HISTORY = "api_history";
@@ -28,6 +30,12 @@ public class HawkConfig {
     public static final String DOH_URL = "doh_url";
     public static final int DEFAULT_HOME_REC = 1;
     public static final String HOME_REC = "home_rec"; // 0 豆瓣热播 1 数据源推荐 2 历史
+    /** 豆瓣热播上次成功的原始 JSON。键名保持不变，避免丢掉已经缓存的数据。 */
+    public static final String HOME_HOT_CACHE = "home_hot";
+    /** 豆瓣热播缓存写入日期，仅作记录，不再用来跳过刷新。 */
+    public static final String HOME_HOT_DAY = "home_hot_day";
+    /** 站点推荐磁盘缓存的 sourceKey 列表，最多留 5 个。 */
+    public static final String HOME_SORT_CACHE_INDEX = "home_sort_cache_index";
     public static final String HISTORY_NUM = "history_num";
     public static final String HISTORY_MERGE = "history_merge";
     public static final String SEARCH_VIEW = "search_view"; // 0 列表 1 缩略图

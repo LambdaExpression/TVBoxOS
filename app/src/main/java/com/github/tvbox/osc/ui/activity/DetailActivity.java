@@ -1044,6 +1044,9 @@ public class DetailActivity extends BaseActivity {
             llLayout.removeCallbacks(detailFallbackDetailTimeout);
             llLayout.postDelayed(detailFallbackDetailTimeout, DETAIL_FALLBACK_DETAIL_TIMEOUT_MS);
         }
+        if (playFragment != null) {
+            playFragment.cancelPendingLoad();
+        }
         sourceViewModel.getDetail(sourceKey, vodId, fallback && detailFallbackActive);
         boolean isVodCollect = RoomDataManger.isVodCollect(sourceKey, vodId);
         if (isVodCollect) {
