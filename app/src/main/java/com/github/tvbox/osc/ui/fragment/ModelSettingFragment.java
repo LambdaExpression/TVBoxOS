@@ -38,7 +38,6 @@ import com.github.tvbox.osc.ui.dialog.BackupDialog;
 import com.github.tvbox.osc.ui.dialog.DanmuApiDialog;
 import com.github.tvbox.osc.ui.dialog.SearchRemoteTvDialog;
 import com.github.tvbox.osc.ui.dialog.SelectDialog;
-import com.github.tvbox.osc.ui.dialog.TipDialog;
 import com.github.tvbox.osc.ui.dialog.XWalkInitDialog;
 import com.github.tvbox.osc.util.DanmuHelper;
 import com.github.tvbox.osc.util.FastClickCheckUtil;
@@ -106,10 +105,10 @@ public class ModelSettingFragment extends BaseLazyFragment {
     private TextView tvIjkCachePlay;
     /** Exo 点播磁盘缓存开关的当前文字。 */
     private TextView tvExoCachePlay;
-    /** Exo 缓存上限的当前文字。 */
+    /** Exo 缓存这一行的文字，格式是已用 / 上限。 */
     private TextView tvExoCacheSize;
-    /** Exo 磁盘缓存已经占用的大小。 */
-    private TextView tvExoCacheUsed;
+    /** 最近一次统计到的已用字节。-1 表示还没统计完。 */
+    private long exoCacheUsedBytes = -1;
     /** 丢掉过期的容量统计，避免清空后又被旧结果盖回去。 */
     private int exoCacheUsageToken;
     private TextView tvHomeDefaultShow;
@@ -168,7 +167,6 @@ public class ModelSettingFragment extends BaseLazyFragment {
         tvIjkCachePlay = findViewById(R.id.tvIjkCachePlay);
         tvExoCachePlay = findViewById(R.id.tvExoCachePlay);
         tvExoCacheSize = findViewById(R.id.tvExoCacheSize);
-        tvExoCacheUsed = findViewById(R.id.tvExoCacheUsed);
         tvMediaCodec.setText(Hawk.get(HawkConfig.IJK_CODEC, "硬解码"));
         tvDebugOpen.setText(Hawk.get(HawkConfig.DEBUG_OPEN, false) ? "已打开" : "已关闭");
         tvParseWebView.setText(Hawk.get(HawkConfig.PARSE_WEBVIEW, true) ? "系统自带" : "XWalkView");
@@ -192,9 +190,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
         if (tvExoCachePlay != null) {
             tvExoCachePlay.setText(HawkConfig.exoCachePlayEnabled() ? "开启" : "关闭");
         }
-        if (tvExoCacheSize != null) {
-            tvExoCacheSize.setText(PlayerHelper.exoCacheSizeName(PlayerHelper.exoCacheSizeMb()));
-        }
+        renderExoCacheSize();
         tvHomeDefaultShow = findViewById(R.id.tvHomeText);
         tvHomeDefaultShow.setText(Hawk.get(HawkConfig.DEFAULT_LOAD_LIVE, false) ? "直播" : "点播");
         findViewById(R.id.llDebug).setOnClickListener(new View.OnClickListener() {
@@ -872,15 +868,6 @@ public class ModelSettingFragment extends BaseLazyFragment {
                 }
             });
         }
-        View exoCacheUsed = findViewById(R.id.llExoCacheUsed);
-        if (exoCacheUsed != null) {
-            exoCacheUsed.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    onClickClearExoCache(v);
-                }
-            });
-        }
         findViewById(R.id.llIjkCachePlay).setOnClickListener((view -> onClickIjkCachePlay(view)));
         findViewById(R.id.llClearCache).setOnClickListener((view -> onClickClearCache(view)));
     }
@@ -1036,10 +1023,22 @@ public class ModelSettingFragment extends BaseLazyFragment {
     }
 
     /**
+     * 设置行上的缓存文字：已用 / 上限。还没统计完时已用显示「统计中」。
+     */
+    private void renderExoCacheSize() {
+        if (tvExoCacheSize == null) {
+            return;
+        }
+        String used = exoCacheUsedBytes < 0 ? "统计中" : PlayerHelper.formatCacheBytes(exoCacheUsedBytes);
+        String limit = PlayerHelper.exoCacheSizeName(PlayerHelper.exoCacheSizeMb());
+        tvExoCacheSize.setText(used + " / " + limit);
+    }
+
+    /**
      * 后台统计 Exo 缓存目录占用。回到设置页时刷新，旧的统计结果不再写回。
      */
     private void refreshExoCacheUsage() {
-        if (tvExoCacheUsed == null || mContext == null) {
+        if (tvExoCacheSize == null || mContext == null) {
             return;
         }
         final int token = ++exoCacheUsageToken;
@@ -1048,78 +1047,43 @@ public class ModelSettingFragment extends BaseLazyFragment {
             @Override
             public void run() {
                 final long bytes = ExoMediaSourceHelper.getInstance(app).playbackCacheUsedBytes();
-                final String text = PlayerHelper.formatCacheBytes(bytes);
                 if (mActivity == null) {
                     return;
                 }
                 mActivity.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (!isAdded() || token != exoCacheUsageToken || tvExoCacheUsed == null) {
+                        if (!isAdded() || token != exoCacheUsageToken) {
                             return;
                         }
-                        tvExoCacheUsed.setText(text);
+                        exoCacheUsedBytes = bytes < 0 ? 0 : bytes;
+                        renderExoCacheSize();
                     }
                 });
             }
         }, "exo-cache-usage").start();
     }
 
-    /**
-     * 确认后清空 Exo 点播磁盘缓存，并重新统计占用。
-     *
-     * @param view 被点击的设置行
-     */
-    private void onClickClearExoCache(View view) {
-        FastClickCheckUtil.check(view);
-        if (mContext == null) {
-            return;
-        }
-        String used = tvExoCacheUsed == null || tvExoCacheUsed.getText() == null ? "" : tvExoCacheUsed.getText().toString();
-        String tip = used.length() == 0 || "统计中".equals(used) ? "清空 Exo 播放缓存？" : "清空 Exo 播放缓存？当前已用 " + used;
-        final TipDialog[] holder = new TipDialog[1];
-        TipDialog dialog = new TipDialog(mContext, tip, "清空", "取消", new TipDialog.OnListener() {
-            @Override
-            public void left() {
-                if (holder[0] != null && holder[0].isShowing()) {
-                    holder[0].dismiss();
-                }
-                clearExoCacheFiles();
-            }
-
-            @Override
-            public void right() {
-                if (holder[0] != null && holder[0].isShowing()) {
-                    holder[0].dismiss();
-                }
-            }
-
-            @Override
-            public void cancel() {
-                if (holder[0] != null && holder[0].isShowing()) {
-                    holder[0].dismiss();
-                }
-            }
-        });
-        holder[0] = dialog;
-        dialog.show();
-    }
-
-    /** 在后台删掉缓存文件。正在播放的这一路可能中断，下次播放会重建。 */
+    /** 在后台删掉缓存文件。正在播放的这一路可能中断，下次播放会重建。失败会提示，不当成已清空。 */
     private void clearExoCacheFiles() {
         if (mContext == null) {
             return;
         }
         exoCacheUsageToken++;
+        exoCacheUsedBytes = 0;
+        renderExoCacheSize();
         final android.content.Context app = mContext.getApplicationContext();
         new Thread(new Runnable() {
             @Override
             public void run() {
+                boolean ok = true;
                 try {
                     ExoMediaSourceHelper.getInstance(app).clearPlaybackCache();
                 } catch (RuntimeException ex) {
+                    ok = false;
                     LOG.e("echo-exo-cache-clear: " + ex.getMessage());
                 }
+                final boolean cleared = ok;
                 if (mActivity == null) {
                     return;
                 }
@@ -1129,7 +1093,11 @@ public class ModelSettingFragment extends BaseLazyFragment {
                         if (!isAdded()) {
                             return;
                         }
-                        Toast.makeText(mContext, "Exo 缓存已清空", Toast.LENGTH_SHORT).show();
+                        if (!cleared) {
+                            Toast.makeText(mContext, "Exo 缓存清空失败", Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(mContext, "Exo 缓存已清空", Toast.LENGTH_SHORT).show();
+                        }
                         refreshExoCacheUsage();
                     }
                 });
@@ -1170,6 +1138,14 @@ public class ModelSettingFragment extends BaseLazyFragment {
         }
         SelectDialog<Integer> dialog = new SelectDialog<>(mActivity);
         dialog.setTip("Exo缓存大小");
+        dialog.setAction("清空缓存", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                FastClickCheckUtil.check(v);
+                dialog.dismiss();
+                clearExoCacheFiles();
+            }
+        });
         dialog.setAdapter(new SelectDialogAdapter.SelectDialogInterface<Integer>() {
             @Override
             public void click(Integer value, int pos) {
@@ -1177,9 +1153,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
                     return;
                 }
                 Hawk.put(HawkConfig.EXO_CACHE_SIZE_MB, value);
-                if (tvExoCacheSize != null) {
-                    tvExoCacheSize.setText(PlayerHelper.exoCacheSizeName(value));
-                }
+                renderExoCacheSize();
             }
 
             @Override

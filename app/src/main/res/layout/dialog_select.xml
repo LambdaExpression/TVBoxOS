@@ -46,11 +46,31 @@
             app:tv_horizontalSpacingWithMargins="@dimen/vs_10"
             app:tv_verticalSpacingWithMargins="@dimen/vs_10" />
 
-        <View
+        <TextView
+            android:id="@+id/action"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/vs_30"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="@dimen/vs_30"
+            android:layout_marginTop="@dimen/vs_10"
+            android:layout_marginRight="@dimen/vs_30"
+            android:background="@drawable/button_danmu_setting"
+            android:focusable="true"
+            android:gravity="center"
+            android:padding="@dimen/vs_10"
+            android:textColor="@color/dialog_text_primary"
+            android:textSize="@dimen/ts_22"
+            android:visibility="gone"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
-            app:layout_constraintTop_toBottomOf="@+id/list" />
+            app:layout_constraintTop_toBottomOf="@+id/list"
+            tools:text="清空缓存"
+            tools:visibility="visible" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/vs_20"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toBottomOf="@+id/action" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 </FrameLayout>

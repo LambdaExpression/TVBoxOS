@@ -2,6 +2,8 @@ package com.github.tvbox.osc.ui.dialog;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.View;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -36,6 +38,22 @@ public class SelectDialog<T> extends BaseDialog {
 
     public void setTip(String tip) {
         ((TextView) findViewById(R.id.title)).setText(tip);
+    }
+
+    /**
+     * 列表最下面的操作按钮。不调用就保持隐藏，其它选择框不受影响。
+     *
+     * @param text     按钮文字，空则继续隐藏
+     * @param listener 点击回调，由调用方决定关不关弹框
+     */
+    public void setAction(String text, View.OnClickListener listener) {
+        TextView action = findViewById(R.id.action);
+        if (action == null || TextUtils.isEmpty(text) || listener == null) {
+            return;
+        }
+        action.setText(text);
+        action.setVisibility(View.VISIBLE);
+        action.setOnClickListener(listener);
     }
 
     public void setAdapter(SelectDialogAdapter.SelectDialogInterface<T> sourceBeanSelectDialogInterface,
