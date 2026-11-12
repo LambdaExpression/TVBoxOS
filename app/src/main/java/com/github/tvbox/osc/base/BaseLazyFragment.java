@@ -14,11 +14,17 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 
+import android.text.TextUtils;
+import android.widget.TextView;
+
+import com.github.tvbox.osc.R;
 import com.github.tvbox.osc.callback.EmptyCallback;
+import com.github.tvbox.osc.callback.ErrorCallback;
 import com.github.tvbox.osc.callback.LoadingCallback;
 import com.kingja.loadsir.callback.Callback;
 import com.kingja.loadsir.core.LoadService;
 import com.kingja.loadsir.core.LoadSir;
+import com.kingja.loadsir.core.Transport;
 
 import java.util.List;
 
@@ -250,6 +256,7 @@ public abstract class BaseLazyFragment extends Fragment implements CustomAdapt {
             mLoadService = LoadSir.getDefault().register(view, new Callback.OnReloadListener() {
                 @Override
                 public void onReload(View v) {
+                    onLoadSirReload();
                 }
             });
         }
@@ -259,8 +266,15 @@ public abstract class BaseLazyFragment extends Fragment implements CustomAdapt {
         mLoadService = LoadSir.getDefault().register(view, new Callback.OnReloadListener() {
             @Override
             public void onReload(View v) {
+                onLoadSirReload();
             }
         });
+    }
+
+    /**
+     * LoadSir 空态/失败态点击重试。子类按需覆盖；默认无操作。
+     */
+    protected void onLoadSirReload() {
     }
 
     protected void showLoading() {
@@ -273,6 +287,31 @@ public abstract class BaseLazyFragment extends Fragment implements CustomAdapt {
         if (null != mLoadService) {
             mLoadService.showCallback(EmptyCallback.class);
         }
+    }
+
+    /**
+     * 结束转圈并展示失败原因。msg 为空时用默认文案。
+     *
+     * @param msg 给用户看的失败说明
+     */
+    protected void showError(String msg) {
+        if (mLoadService == null) {
+            return;
+        }
+        final String tip = TextUtils.isEmpty(msg) ? "加载失败" : msg;
+        mLoadService.setCallBack(ErrorCallback.class, new Transport() {
+            @Override
+            public void order(Context context, View view) {
+                if (view == null) {
+                    return;
+                }
+                TextView tv = view.findViewById(R.id.loadsir_error_msg);
+                if (tv != null) {
+                    tv.setText(tip);
+                }
+            }
+        });
+        mLoadService.showCallback(ErrorCallback.class);
     }
 
     protected void showSuccess() {

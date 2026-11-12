@@ -3,6 +3,7 @@ package com.github.tvbox.osc.util;
 import com.github.catvod.crawler.JsLoader;
 
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -121,6 +122,7 @@ public final class SpiderJob {
         future = result;
         try {
             String value = result.get(timeoutSeconds, TimeUnit.SECONDS);
+            // 被新一轮替换时不再回调，避免旧结果盖住新请求的 loading。
             if (!cancelled.get()) {
                 callback.onResult(value);
             }
@@ -129,15 +131,33 @@ public final class SpiderJob {
             cancel();
             callback.onTimeout();
         } catch (CancellationException ex) {
+            // 也要回调：ViewPager 多 Fragment 共用静态 SpiderJob 时，旧页取消后若不通知会一直转圈。
+            // 调用方用 requestSeq 丢弃过期结果。
             LOG.i("echo-spider-job-cancelled");
-        } catch (Exception ex) {
-            if (cancelled.get()) {
-                LOG.i("echo-spider-job-cancelled: " + ex.getMessage());
-                return;
-            }
             callback.onError(ex);
+        } catch (Exception ex) {
+            // 爬虫抛错时，即便随后被 cancel，也要把错误交给回调。
+            // 调用方用 requestSeq 丢掉过期结果；否则「失败 + 被取消」会一直转圈。
+            Throwable error = unwrapExecution(ex);
+            if (cancelled.get()) {
+                LOG.i("echo-spider-job-cancelled: " + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+            }
+            callback.onError(error);
         } finally {
             worker.shutdownNow();
         }
+    }
+
+    /**
+     * Future.get 失败时常见包装是 ExecutionException，UI/日志需要真正的爬虫异常。
+     *
+     * @param error get() 抛出的异常
+     * @return 解包后的 cause；没有 cause 则返回原对象
+     */
+    private static Throwable unwrapExecution(Throwable error) {
+        if (error instanceof ExecutionException && error.getCause() != null) {
+            return error.getCause();
+        }
+        return error;
     }
 }

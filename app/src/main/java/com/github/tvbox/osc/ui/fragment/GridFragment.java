@@ -2,6 +2,7 @@ package com.github.tvbox.osc.ui.fragment;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -427,9 +428,20 @@ public class GridFragment extends BaseLazyFragment {
                         gridAdapter.setEnableLoadMore(true);
                     }
                 } else {
+                    // 失败带 msg：结束转圈并展示原因；纯空列表仍走「没找到数据」。
+                    String failMsg = absXml == null ? null : absXml.msg;
                     if (page == 1) {
                         hasActionItems = false;
-                        showEmpty();
+                        if (!TextUtils.isEmpty(failMsg)) {
+                            showError(failMsg);
+                        } else {
+                            showEmpty();
+                        }
+                    } else if (!TextUtils.isEmpty(failMsg)) {
+                        Toast.makeText(getContext(), failMsg, Toast.LENGTH_SHORT).show();
+                        gridAdapter.loadMoreFail();
+                        gridAdapter.setEnableLoadMore(true);
+                        return;
                     } else if(page > 2){// 只有一页数据时不提示
                         Toast.makeText(getContext(), "没有更多了", Toast.LENGTH_SHORT).show();
                     }
@@ -551,6 +563,14 @@ public class GridFragment extends BaseLazyFragment {
             adapter.setNewData(options);
             gridFilterDialog.filterRoot.addView(line);
         }
+    }
+
+    /**
+     * 空态/失败态点击重试。
+     */
+    @Override
+    protected void onLoadSirReload() {
+        forceRefresh();
     }
 
     public void forceRefresh() {

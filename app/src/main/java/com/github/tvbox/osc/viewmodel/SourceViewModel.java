@@ -786,17 +786,18 @@ public class SourceViewModel extends ViewModel {
     public void getList(MovieSort.SortData sortData, int page) {
         if (sortData == null) {
             LOG.i("echo-getList-sortData-null");
-            listResult.postValue(null);
+            postListFailure("", "分类无效");
             return;
         }
         SourceBean homeSourceBean = ApiConfig.get().getHomeSourceBean();
         if (homeSourceBean == null) {
             LOG.i("echo-getList-source-null");
-            listResult.postValue(null);
+            postListFailure("", "未选择首页源");
             return;
         }
         int type = homeSourceBean.getType();
         final int requestSeq = listRequestSeq.incrementAndGet();
+        final String sourceKey = homeSourceBean.getKey();
         final HashMap<String, String> filters = activeFilters(sortData);
         if (type == 3) {
             cancelJob(listSpiderJob);
@@ -812,13 +813,25 @@ public class SourceViewModel extends ViewModel {
                 public void run() {
                     job.run(listTimeout, new SpiderJob.Task() {
                         @Override
-                        public String call() {
+                        public String call() throws Exception {
                             if (requestSeq != listRequestSeq.get()) {
                                 return "";
                             }
                             Spider sp = ApiConfig.get().getCSP(homeSourceBean);
+                            if (sp == null) {
+                                throw new IllegalStateException("源加载失败");
+                            }
                             syncDoubanHistory(homeSourceBean, sortData.id, page);
-                            return sp.categoryContent(sortData.id, page + "", true, filters);
+                            // 站源 jar 常 catch 后 printStackTrace 再返回空；这里把 Throwable 也抬成失败。
+                            try {
+                                String body = sp.categoryContent(sortData.id, page + "", true, filters);
+                                return body == null ? "" : body;
+                            } catch (Throwable th) {
+                                if (th instanceof Exception) {
+                                    throw (Exception) th;
+                                }
+                                throw new Exception(th);
+                            }
                         }
                     }, new SpiderJob.Callback() {
                         @Override
@@ -827,26 +840,34 @@ public class SourceViewModel extends ViewModel {
                                 return;
                             }
                             if (json != null && json.length() > 0) {
-                                json(listResult, json, homeSourceBean.getKey());
+                                json(listResult, json, sourceKey);
                             } else {
-                                listResult.postValue(null);
+                                // jar 吞异常后常返回空串，对用户更像失败而不是「没找到数据」。
+                                postListFailure(sourceKey, "当前源未返回数据，请换源或重试");
                             }
                         }
 
                         @Override
                         public void onTimeout() {
-                            LOG.i("echo--getList-timeout--" + homeSourceBean.getKey());
+                            LOG.i("echo--getList-timeout--" + sourceKey);
                             if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                                postListFailure(sourceKey, "加载超时，请重试");
                             }
                         }
 
                         @Override
                         public void onError(Throwable error) {
-                            LOG.e("echo--getList-error--" + homeSourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
-                            if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
                             }
+                            // 被新请求替换的取消：静默收尾，避免误报失败。
+                            if (error instanceof java.util.concurrent.CancellationException) {
+                                postListEmpty(sourceKey);
+                                return;
+                            }
+                            String detail = error == null ? "" : error.getMessage();
+                            LOG.e("echo--getList-error--" + sourceKey + "--" + detail);
+                            postListFailure(sourceKey, formatListFailure(error));
                         }
                     });
                 }
@@ -889,7 +910,7 @@ public class SourceViewModel extends ViewModel {
                         public void onError(Response<String> response) {
                             super.onError(response);
                             if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                                postListFailure(sourceKey, "网络请求失败，请重试");
                             }
                         }
                     });
@@ -955,22 +976,76 @@ public class SourceViewModel extends ViewModel {
                         public void onError(Response<String> response) {
                             super.onError(response);
                             if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                                postListFailure(sourceKey, "网络请求失败，请重试");
                             }
                         }
                     });
                 }
             });
         } else {
-            listResult.postValue(null);
+            postListFailure(sourceKey, "不支持的源类型");
         }
+    }
+
+    /**
+     * 列表空结果。每次 new 一个 AbsXml，避免 LiveData 连续 post null 不通知导致一直转圈。
+     *
+     * @param sourceKey 当前源 key，可空
+     */
+    private void postListEmpty(String sourceKey) {
+        AbsXml data = new AbsXml();
+        data.sourceKey = sourceKey == null ? "" : sourceKey;
+        data.movie = new Movie();
+        data.movie.videoList = new ArrayList<>();
+        listResult.postValue(data);
+    }
+
+    /**
+     * 列表失败结果。msg 给 UI 展示；同样必须每次新对象。
+     *
+     * @param sourceKey 当前源 key，可空
+     * @param msg       用户可读失败原因
+     */
+    private void postListFailure(String sourceKey, String msg) {
+        AbsXml data = new AbsXml();
+        data.sourceKey = sourceKey == null ? "" : sourceKey;
+        data.msg = TextUtils.isEmpty(msg) ? "加载失败，请重试" : msg;
+        data.movie = new Movie();
+        data.movie.videoList = new ArrayList<>();
+        listResult.postValue(data);
+    }
+
+    /**
+     * 把爬虫/网络异常收成短提示。站源 jar 内部异常对用户没帮助，统一成可读文案。
+     *
+     * @param error 原始异常，可为 null
+     * @return 展示文案
+     */
+    private static String formatListFailure(Throwable error) {
+        if (error == null) {
+            return "加载失败，请重试";
+        }
+        if (error instanceof StringIndexOutOfBoundsException
+                || error instanceof IndexOutOfBoundsException
+                || error instanceof NullPointerException) {
+            return "当前源解析失败，请换源或稍后重试";
+        }
+        String detail = error.getMessage();
+        if (TextUtils.isEmpty(detail)) {
+            return "加载失败，请重试";
+        }
+        // 过长堆栈信息不要直接甩给用户
+        if (detail.length() > 80) {
+            return "加载失败，请重试";
+        }
+        return "加载失败：" + detail;
     }
 
     /** Loads a folder/category for a specific source (used by inline search folders). */
     public void getList(String sourceKey, String id) {
         final SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
         if (sourceBean == null || TextUtils.isEmpty(id)) {
-            listResult.postValue(null);
+            postListFailure(sourceKey == null ? "" : sourceKey, "分类无效");
             return;
         }
         final int type = sourceBean.getType();
@@ -989,13 +1064,24 @@ public class SourceViewModel extends ViewModel {
                 public void run() {
                     job.run(listTimeout, new SpiderJob.Task() {
                         @Override
-                        public String call() {
+                        public String call() throws Exception {
                             if (requestSeq != listRequestSeq.get()) {
                                 return "";
                             }
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
+                            if (sp == null) {
+                                throw new IllegalStateException("源加载失败");
+                            }
                             syncDoubanHistory(sourceBean, id, 1);
-                            return sp.categoryContent(id, "1", true, new HashMap<String, String>());
+                            try {
+                                String body = sp.categoryContent(id, "1", true, new HashMap<String, String>());
+                                return body == null ? "" : body;
+                            } catch (Throwable th) {
+                                if (th instanceof Exception) {
+                                    throw (Exception) th;
+                                }
+                                throw new Exception(th);
+                            }
                         }
                     }, new SpiderJob.Callback() {
                         @Override
@@ -1006,23 +1092,28 @@ public class SourceViewModel extends ViewModel {
                             if (json != null && json.length() > 0) {
                                 json(listResult, json, sourceBean.getKey());
                             } else {
-                                listResult.postValue(null);
+                                postListFailure(sourceBean.getKey(), "当前源未返回数据，请换源或重试");
                             }
                         }
 
                         @Override
                         public void onTimeout() {
                             if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                                postListFailure(sourceBean.getKey(), "加载超时，请重试");
                             }
                         }
 
                         @Override
                         public void onError(Throwable error) {
-                            LOG.e("echo--getFolderList-error--" + sourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
-                            if (requestSeq == listRequestSeq.get()) {
-                                listResult.postValue(null);
+                            if (requestSeq != listRequestSeq.get()) {
+                                return;
                             }
+                            if (error instanceof java.util.concurrent.CancellationException) {
+                                postListEmpty(sourceBean.getKey());
+                                return;
+                            }
+                            LOG.e("echo--getFolderList-error--" + sourceBean.getKey() + "--" + (error == null ? "" : error.getMessage()));
+                            postListFailure(sourceBean.getKey(), formatListFailure(error));
                         }
                     });
                 }
@@ -1049,7 +1140,7 @@ public class SourceViewModel extends ViewModel {
                         @Override
                         public void onError(Response<String> response) {
                             super.onError(response);
-                            listResult.postValue(null);
+                            postListFailure(sourceBean.getKey(), "网络请求失败，请重试");
                         }
                     });
         } else if (type == 4) {
@@ -1080,13 +1171,13 @@ public class SourceViewModel extends ViewModel {
                 @Override
                 public void onError(Response<String> response) {
                     super.onError(response);
-                    listResult.postValue(null);
+                    postListFailure(sourceBean.getKey(), "网络请求失败，请重试");
                 }
             });
                 }
             });
         } else {
-            listResult.postValue(null);
+            postListFailure(sourceBean.getKey(), "不支持的源类型");
         }
     }
 
@@ -2550,6 +2641,8 @@ public class SourceViewModel extends ViewModel {
                     AbsXml data = new AbsXml();
                     data.sourceKey = sourceKey;
                     result.postValue(data);
+                } else if (result == listResult) {
+                    postListFailure(sourceKey, "数据解析失败，请重试");
                 } else {
                     result.postValue(null);
                 }
@@ -2606,6 +2699,9 @@ public class SourceViewModel extends ViewModel {
                     AbsXml data = new AbsXml();
                     data.sourceKey = sourceKey;
                     result.postValue(data);
+                } else if (result == listResult) {
+                    // 列表 JSON 解析失败也要结束转圈，并带上可读原因。
+                    postListFailure(sourceKey, "数据解析失败，请重试");
                 } else {
                     result.postValue(null);
                 }
