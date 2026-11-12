@@ -61,6 +61,8 @@ import org.json.JSONObject;
  */
 public class GridFragment extends BaseLazyFragment {
     private MovieSort.SortData sortData = null;
+    /** 指定站源 key。为空走首页站源；独立页面（如网盘登录）传入自己的站点，不影响首页。 */
+    private String fixedSourceKey = null;
     private TvRecyclerView mGridView;
     private SourceViewModel sourceViewModel;
     private GridFilterDialog gridFilterDialog;
@@ -100,6 +102,25 @@ public class GridFragment extends BaseLazyFragment {
     public GridFragment setArguments(MovieSort.SortData sortData) {
         this.sortData = sortData;
         return this;
+    }
+
+    /**
+     * 让这个分类页固定请求指定站点，而不是首页站源。
+     *
+     * @param sourceKey 站点 key，传空表示继续用首页站源
+     */
+    public GridFragment setFixedSourceKey(String sourceKey) {
+        this.fixedSourceKey = TextUtils.isEmpty(sourceKey) ? null : sourceKey;
+        return this;
+    }
+
+    /** 按固定站点（没有就按首页站源）请求当前分类的当前页。 */
+    private void requestList() {
+        if (fixedSourceKey == null) {
+            sourceViewModel.getList(sortData, page);
+            return;
+        }
+        sourceViewModel.getList(ApiConfig.get().getSource(fixedSourceKey), sortData, page);
     }
 
     @Override
@@ -234,7 +255,7 @@ public class GridFragment extends BaseLazyFragment {
             @Override
             public void onLoadMoreRequested() {
                 gridAdapter.setEnableLoadMore(true);
-                sourceViewModel.getList(sortData, page);
+                requestList();
             }
         }, mGridView);
         mGridView.setOnItemListener(new TvRecyclerView.OnItemListener() {
@@ -478,7 +499,7 @@ public class GridFragment extends BaseLazyFragment {
         hasActionItems = false;
         scrollTop();
         toggleFilterColor();
-        sourceViewModel.getList(sortData, page);
+        requestList();
     }
 
     private boolean hasActionVideo(List<Movie.Video> videos) {

@@ -784,12 +784,22 @@ public class SourceViewModel extends ViewModel {
     }
     // categoryContent
     public void getList(MovieSort.SortData sortData, int page) {
+        getList(ApiConfig.get().getHomeSourceBean(), sortData, page);
+    }
+
+    /**
+     * 按指定站源加载分类列表。首页走上面的重载（取首页站源），独立页面（如网盘登录）直接传站点。
+     *
+     * @param homeSourceBean 要请求的站源，为空时按「未选择首页源」失败
+     * @param sortData       分类
+     * @param page           页码
+     */
+    public void getList(final SourceBean homeSourceBean, MovieSort.SortData sortData, int page) {
         if (sortData == null) {
             LOG.i("echo-getList-sortData-null");
             postListFailure("", "分类无效");
             return;
         }
-        SourceBean homeSourceBean = ApiConfig.get().getHomeSourceBean();
         if (homeSourceBean == null) {
             LOG.i("echo-getList-source-null");
             postListFailure("", "未选择首页源");
