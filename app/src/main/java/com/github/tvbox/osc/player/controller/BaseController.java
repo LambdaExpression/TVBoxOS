@@ -1,10 +1,14 @@
 package com.github.tvbox.osc.player.controller;
 
+import android.animation.ObjectAnimator;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.app.Activity;
 import android.content.Context;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Message;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.KeyEvent;
@@ -13,6 +17,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.animation.LinearInterpolator;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -24,6 +30,7 @@ import java.util.Map;
 import xyz.doikki.videoplayer.controller.BaseVideoController;
 import xyz.doikki.videoplayer.controller.IControlComponent;
 import xyz.doikki.videoplayer.controller.IGestureComponent;
+import xyz.doikki.videoplayer.controller.MediaPlayerControl;
 import xyz.doikki.videoplayer.player.VideoView;
 import xyz.doikki.videoplayer.util.PlayerUtils;
 
@@ -94,6 +101,20 @@ public abstract class BaseController extends BaseVideoController implements Gest
     private ProgressBar mLoading;
     private ViewGroup mPauseRoot;
     private TextView mPauseTime;
+    /** 暂停条上的播放图标，恢复时慢慢转。 */
+    private ImageView mPauseIcon;
+    /** 图标旋转。声音没好之前一直转。 */
+    private ObjectAnimator mPauseIconSpin;
+    /** 正在等声音恢复，这段时间画面停在暂停帧。 */
+    private boolean mResumeWaiting;
+    /** 放弃等待或已经开播后，迟到的回调不再继续。 */
+    private int mResumeToken;
+    /** 绑定的播放器，用来等声音和结束过渡后开播。 */
+    private VideoView<?> mBoundVideoView;
+    /** 图标至少转这么久，声音很快就绪时过渡也不会一闪而过。 */
+    private static final long RESUME_SPIN_MIN_MS = 400L;
+    /** 暂停条淡出时间。淡出结束后才开播。 */
+    private static final long RESUME_FADE_MS = 220L;
 
     @Override
     protected void initView() {
@@ -105,6 +126,26 @@ public abstract class BaseController extends BaseVideoController implements Gest
         mLoading = findViewWithTag("vod_control_loading");
         mPauseRoot = findViewWithTag("vod_control_pause");
         mPauseTime = findViewWithTag("vod_control_pause_t");
+        mPauseIcon = findViewWithTag("vod_control_pause_icon");
+    }
+
+    /**
+     * 记下播放器，暂停后恢复时先等声音，再让中间那条提示淡出。
+     */
+    @Override
+    public void setMediaPlayer(MediaPlayerControl mediaPlayer) {
+        super.setMediaPlayer(mediaPlayer);
+        if (mediaPlayer instanceof VideoView) {
+            mBoundVideoView = (VideoView<?>) mediaPlayer;
+            mBoundVideoView.setResumeGate(new VideoView.ResumeGate() {
+                @Override
+                public boolean onResumeFromPause() {
+                    return beginResumeWhenAudioReady();
+                }
+            });
+        } else {
+            mBoundVideoView = null;
+        }
     }
 
     @Override
@@ -116,6 +157,9 @@ public abstract class BaseController extends BaseVideoController implements Gest
     @Override
     protected void onPlayStateChanged(int playState) {
         super.onPlayStateChanged(playState);
+        if (playState != VideoView.STATE_PAUSED && mResumeWaiting) {
+            abortResumeWait(false);
+        }
         switch (playState) {
             case VideoView.STATE_IDLE:
                 mPauseRoot.setVisibility(GONE);
@@ -126,7 +170,14 @@ public abstract class BaseController extends BaseVideoController implements Gest
                 mLoading.setVisibility(GONE);
                 break;
             case VideoView.STATE_PAUSED:
-                mPauseRoot.setVisibility(VISIBLE);
+                if (mPauseRoot != null) {
+                    mPauseRoot.animate().cancel();
+                    mPauseRoot.setAlpha(1f);
+                    mPauseRoot.setVisibility(VISIBLE);
+                }
+                if (mPauseIcon != null) {
+                    mPauseIcon.setRotation(0f);
+                }
                 mLoading.setVisibility(GONE);
                 break;
             case VideoView.STATE_PREPARED:
@@ -173,6 +224,130 @@ public abstract class BaseController extends BaseVideoController implements Gest
      */
     public void setDoubleTapTogglePlayEnabled(boolean enabled) {
         mIsDoubleTapTogglePlayEnabled = enabled;
+    }
+
+    /**
+     * 暂停后继续：播放图标先转，声音通道恢复后这条提示淡出，再开始播放。
+     * 再按一次则取消等待，画面继续停着。
+     *
+     * @return true 这次先不开播
+     */
+    private boolean beginResumeWhenAudioReady() {
+        if (mPauseRoot == null || mBoundVideoView == null) {
+            return false;
+        }
+        if (mResumeWaiting) {
+            abortResumeWait(true);
+            return true;
+        }
+        mResumeWaiting = true;
+        final int token = ++mResumeToken;
+        startPauseIconSpin();
+        final long begin = SystemClock.uptimeMillis();
+        mBoundVideoView.warmUpAudio(new Runnable() {
+            @Override
+            public void run() {
+                if (token != mResumeToken || !isAttachedToWindow()) {
+                    return;
+                }
+                long remain = RESUME_SPIN_MIN_MS - (SystemClock.uptimeMillis() - begin);
+                if (remain > 0) {
+                    postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            fadePauseChipThenStart(token);
+                        }
+                    }, remain);
+                } else {
+                    fadePauseChipThenStart(token);
+                }
+            }
+        });
+        return true;
+    }
+
+    /**
+     * 声音已经恢复。淡出中间的暂停条，淡出完再开播。
+     *
+     * @param token 发起这次等待时的代号
+     */
+    private void fadePauseChipThenStart(final int token) {
+        if (token != mResumeToken || mBoundVideoView == null) {
+            return;
+        }
+        if (mPauseRoot == null) {
+            mResumeWaiting = false;
+            stopPauseIconSpin();
+            mBoundVideoView.cancelAudioWarmup();
+            mBoundVideoView.startSkippingResumeGate();
+            return;
+        }
+        mPauseRoot.animate().alpha(0f).setDuration(RESUME_FADE_MS).setListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (token != mResumeToken || mBoundVideoView == null) {
+                    return;
+                }
+                mPauseRoot.animate().setListener(null);
+                stopPauseIconSpin();
+                mResumeWaiting = false;
+                mBoundVideoView.cancelAudioWarmup();
+                mBoundVideoView.startSkippingResumeGate();
+            }
+        });
+    }
+
+    /**
+     * 停止等待。恢复暂停条时把透明度设回 1，避免下次暂停看不见。
+     *
+     * @param restoreChip true 时把暂停条留在画面上
+     */
+    private void abortResumeWait(boolean restoreChip) {
+        mResumeToken++;
+        mResumeWaiting = false;
+        if (mBoundVideoView != null) {
+            mBoundVideoView.cancelAudioWarmup();
+        }
+        stopPauseIconSpin();
+        if (mPauseRoot == null) {
+            return;
+        }
+        mPauseRoot.animate().setListener(null);
+        mPauseRoot.animate().cancel();
+        mPauseRoot.setAlpha(1f);
+        if (restoreChip) {
+            mPauseRoot.setVisibility(VISIBLE);
+        }
+    }
+
+    /**
+     * 播放图标绕中心慢慢转一圈，重复到声音恢复。
+     */
+    private void startPauseIconSpin() {
+        if (mPauseIcon == null) {
+            return;
+        }
+        stopPauseIconSpin();
+        mPauseIcon.setPivotX(mPauseIcon.getWidth() / 2f);
+        mPauseIcon.setPivotY(mPauseIcon.getHeight() / 2f);
+        mPauseIconSpin = ObjectAnimator.ofFloat(mPauseIcon, View.ROTATION, 0f, 360f);
+        mPauseIconSpin.setDuration(1400L);
+        mPauseIconSpin.setRepeatCount(ObjectAnimator.INFINITE);
+        mPauseIconSpin.setInterpolator(new LinearInterpolator());
+        mPauseIconSpin.start();
+    }
+
+    /**
+     * 停掉旋转，图标角度回到朝上。
+     */
+    private void stopPauseIconSpin() {
+        if (mPauseIconSpin != null) {
+            mPauseIconSpin.cancel();
+            mPauseIconSpin = null;
+        }
+        if (mPauseIcon != null) {
+            mPauseIcon.setRotation(0f);
+        }
     }
 
     public void hidePauseRoot() {

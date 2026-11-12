@@ -674,7 +674,8 @@
                 android:layout_marginEnd="@dimen/vs_20"
                 android:focusable="false"
                 android:focusableInTouchMode="false"
-                android:src="@drawable/exo_icon_play" />
+                android:src="@drawable/exo_icon_play"
+                android:tag="vod_control_pause_icon" />
 
             <TextView
                 android:id="@+id/tv_pause_progress_text"

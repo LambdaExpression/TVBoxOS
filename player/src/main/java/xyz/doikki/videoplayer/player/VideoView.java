@@ -46,6 +46,16 @@ import xyz.doikki.videoplayer.util.PlayerUtils;
 public class VideoView<P extends AbstractPlayer> extends FrameLayout
         implements MediaPlayerControl, AbstractPlayer.PlayerEventListener {
 
+    /**
+     * 暂停后点继续。返回 true 表示先做过渡，控制器稍后再真正开播。
+     */
+    public interface ResumeGate {
+        /**
+         * @return true 先挡住这次 start，等过渡结束后再开播
+         */
+        boolean onResumeFromPause();
+    }
+
     protected P mMediaPlayer;//播放器
     protected PlayerFactory<P> mPlayerFactory;//工厂类，用于实例化播放核心
     @Nullable
@@ -74,6 +84,10 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
     //--------- data sources ---------//
     protected String mUrl;//当前播放视频的地址
     protected String mProgressKey = null;
+    /** 暂停恢复时的过渡。为空则暂停后立刻继续播。 */
+    private ResumeGate mResumeGate;
+    /** 过渡结束时的那次 start 不再进入过渡。 */
+    private boolean mSkipResumeGate;
     protected Map<String, String> mHeaders;//当前视频地址的请求头
     protected AssetFileDescriptor mAssetFileDescriptor;//assets文件
 
@@ -180,15 +194,70 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
     }
 
     /**
-     * 开始播放，注意：调用此方法后必须调用{@link #release()}释放播放器，否则会导致内存泄漏
+     * 暂停后的继续播放交给控制器做过渡。过渡里再次调用会被跳过，避免循环等待。
+     *
+     * @param gate 过渡回调，可空
+     */
+    public void setResumeGate(ResumeGate gate) {
+        mResumeGate = gate;
+    }
+
+    /**
+     * 先把音频焦点要回来，并确认声卡已经能出声。静音时不用等。
+     *
+     * @param onReady 可以开始过渡收尾，不能为空
+     */
+    public void warmUpAudio(Runnable onReady) {
+        if (onReady == null) {
+            return;
+        }
+        if (mEnableAudioFocus && !isMute()) {
+            if (mAudioFocusHelper == null) {
+                mAudioFocusHelper = new AudioFocusHelper(this);
+            }
+            mAudioFocusHelper.requestFocus();
+            AudioResumeWarmup.warm(onReady);
+            return;
+        }
+        onReady.run();
+    }
+
+    /**
+     * 放弃还在等的声音恢复，对应回调不会再开播。
+     */
+    public void cancelAudioWarmup() {
+        AudioResumeWarmup.cancel();
+    }
+
+    /**
+     * 开始播放，注意：调用此方法后必须调用{@link #release()}释放播放器，否则会导致内存泄漏。
+     * 从暂停恢复时，如果设置了过渡，会先等声音就绪再真正开播。
      */
     @Override
     public void start() {
+        if (!mSkipResumeGate
+                && mCurrentPlayState == STATE_PAUSED
+                && mResumeGate != null
+                && mResumeGate.onResumeFromPause()) {
+            return;
+        }
         if (isInIdleState()
                 || isInStartAbortState()) {
             startPlay();
         } else if (isInPlaybackState()) {
             startInPlaybackState();
+        }
+    }
+
+    /**
+     * 过渡已经结束，这次开始播放不再等声音。
+     */
+    public void startSkippingResumeGate() {
+        mSkipResumeGate = true;
+        try {
+            start();
+        } finally {
+            mSkipResumeGate = false;
         }
     }
 
