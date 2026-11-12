@@ -163,7 +163,7 @@ public class ExoPlayer extends ExoMediaPlayer {
             return;
         }
         boolean live = Hawk.get(HawkConfig.PLAYER_IS_LIVE, false);
-        boolean enabled = !live && Hawk.get(HawkConfig.EXO_CACHE_PLAY, false);
+        boolean enabled = !live && HawkConfig.exoCachePlayEnabled();
         mMediaSourceHelper.setPlaybackCache(enabled, PlayerHelper.exoCacheSizeBytes());
         LOG.i("echo-exo-cache enabled=" + enabled + " sizeMb=" + PlayerHelper.exoCacheSizeMb());
     }

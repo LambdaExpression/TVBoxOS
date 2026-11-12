@@ -1,5 +1,7 @@
 package com.github.tvbox.osc.util;
 
+import com.orhanobut.hawk.Hawk;
+
 /**
  * @author pj567
  * @date :2020/12/23
@@ -60,7 +62,7 @@ public class HawkConfig {
     public static final String NOW_DATE = "now_date"; //当前日期
     public static final String REMOTE_TVBOX = "remote_tvbox_host";
     public static final String IJK_CACHE_PLAY = "ijk_cache_play";
-    /** Exo 点播是否把已下载片段写入磁盘，供回拉和再次播放命中。直播不使用。 */
+    /** Exo 点播是否把已下载片段写入磁盘，供回拉和再次播放命中。直播不使用。没存过时默认开启。 */
     public static final String EXO_CACHE_PLAY = "exo_cache_play";
     /** Exo 磁盘缓存上限，单位 MB。只允许 512、1024、2048、4096。 */
     public static final String EXO_CACHE_SIZE_MB = "exo_cache_size_mb";
@@ -71,6 +73,7 @@ public class HawkConfig {
     public static final String LIVE_GROUP_INDEX = "live_group_index";
     public static final String LIVE_GROUP_LIST = "live_group_list";
     public static final String LIVE_API_URL = "live_api_url";
+    /** m3u8 去广告。没存过时默认开启。 */
     public static final String M3U8_PURIFY = "m3u8_purify";
     public static final String AUTO_SWITCH_LINE = "auto_switch_line";
     public static final String SCREEN_DISPLAY = "screen_display";
@@ -85,4 +88,18 @@ public class HawkConfig {
     public static final String DANMU_RANDOM_COLOR = "danmu_random_color";
     public static final String DANMU_API = "danmu_api";
     public static boolean hotVodDelete;
+
+    /**
+     * 去广告是否打开。只认用户存过的值，没存过按开启。
+     */
+    public static boolean m3u8PurifyEnabled() {
+        return Hawk.get(M3U8_PURIFY, true);
+    }
+
+    /**
+     * Exo 点播磁盘缓存是否打开。只认用户存过的值，没存过按开启。
+     */
+    public static boolean exoCachePlayEnabled() {
+        return Hawk.get(EXO_CACHE_PLAY, true);
+    }
 }
