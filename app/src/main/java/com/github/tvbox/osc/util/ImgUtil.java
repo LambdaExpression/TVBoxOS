@@ -43,7 +43,15 @@ import java.util.Random;
 import me.jessyan.autosize.utils.AutoSizeUtils;
 
 public class ImgUtil {
-    private static final Map<String, Drawable> drawableCache = new HashMap<>();
+    // 兜底图/占位图缓存：限制数量并加锁，避免片名越多缓存越大，也避免多线程同时读写。
+    private static final int DRAWABLE_CACHE_MAX = 64;
+    private static final Map<String, Drawable> drawableCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, Drawable>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Drawable> eldest) {
+                    return size() > DRAWABLE_CACHE_MAX;
+                }
+            });
     public static int defaultWidth = 244;
     public static int defaultHeight = 320;
 
@@ -109,23 +117,39 @@ public class ImgUtil {
     }
 
     public static void load(String url, ImageView view, int roundingRadius, int newWidth, int newHeight, String label, ImageView.ScaleType scaleType) {
+        loadInternal(url, view, roundingRadius, newWidth, newHeight, label, scaleType, new FitCenter());
+    }
+
+    public static void load(String url, ImageView view, int roundingRadius, int newWidth, int newHeight, String label) {
+        loadInternal(url, view, roundingRadius, newWidth, newHeight, label, ImageView.ScaleType.CENTER_CROP, new CenterCrop());
+    }
+
+    /**
+     * 两个 load 重载共用的实现：解码格式统一，并让 Glide 跟随 view 所在页面的生命周期，
+     * 页面销毁后未完成的请求会被自动取消。
+     */
+    private static void loadInternal(String url, ImageView view, int roundingRadius, int newWidth, int newHeight,
+                                     String label, ImageView.ScaleType scaleType,
+                                     com.bumptech.glide.load.resource.bitmap.BitmapTransformation fit) {
         view.setScaleType(scaleType);
         if (roundingRadius <= 0) roundingRadius = 1;
         Drawable fallback = createTextDrawable(TextUtils.isEmpty(label) ? "TVBox" : label, newWidth, newHeight, roundingRadius);
-        Drawable placeholder = createImagePlaceholderDrawable(newWidth, newHeight, roundingRadius);
         if (isInvalidImageUrl(url)) {
+            // view 被复用时先取消上一次还在飞的请求，否则旧图晚到后会覆盖兜底图。
+            clearRequest(view);
             view.setImageDrawable(fallback);
             return;
         }
+        Drawable placeholder = createImagePlaceholderDrawable(newWidth, newHeight, roundingRadius);
         RequestOptions options = new RequestOptions()
-                .format(DecodeFormat.PREFER_ARGB_8888)
+                .format(DecodeFormat.PREFER_RGB_565)
                 .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
                 .dontAnimate()
-                .transform(new FitCenter(), new RoundedCorners(roundingRadius));
+                .transform(fit, new RoundedCorners(roundingRadius));
         if (newWidth > 0 && newHeight > 0) {
             options = options.override(newWidth, newHeight);
         }
-        Glide.with(App.getInstance())
+        requestManager(view)
                 .asBitmap()
                 .load(getUrl(url))
                 .placeholder(placeholder)
@@ -135,31 +159,20 @@ public class ImgUtil {
                 .into(view);
     }
 
-    public static void load(String url, ImageView view, int roundingRadius, int newWidth, int newHeight, String label) {
-        view.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        if (roundingRadius <= 0) roundingRadius = 1;
-        Drawable fallback = createTextDrawable(TextUtils.isEmpty(label) ? "TVBox" : label, newWidth, newHeight, roundingRadius);
-        Drawable placeholder = createImagePlaceholderDrawable(newWidth, newHeight, roundingRadius);
-        if (isInvalidImageUrl(url)) {
-            view.setImageDrawable(fallback);
-            return;
+    /** 优先绑定 view 所在页面的生命周期；页面已销毁或取不到时退回 Application 级别。 */
+    private static com.bumptech.glide.RequestManager requestManager(ImageView view) {
+        try {
+            return Glide.with(view);
+        } catch (Throwable ignored) {
+            return Glide.with(App.getInstance());
         }
-        RequestOptions options = new RequestOptions()
-                .format(DecodeFormat.PREFER_RGB_565)
-                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
-                .dontAnimate()
-                .transform(new CenterCrop(), new RoundedCorners(roundingRadius));
-        if (newWidth > 0 && newHeight > 0) {
-            options = options.override(newWidth, newHeight);
+    }
+
+    private static void clearRequest(ImageView view) {
+        try {
+            Glide.with(view).clear(view);
+        } catch (Throwable ignored) {
         }
-        Glide.with(App.getInstance())
-                .asBitmap()
-                .load(getUrl(url))
-                .placeholder(placeholder)
-                .error(fallback)
-                .listener(getListener(view, ImageView.ScaleType.CENTER_CROP, fallback))
-                .apply(options)
-                .into(view);
     }
 
     public static void loadUrl(String url, ImageView view) {
@@ -192,7 +205,7 @@ public class ImgUtil {
         if (cornerRadius <= 0) cornerRadius = 1;
         String key = text + "_" + width + "x" + height + "_" + (int) cornerRadius;
         text = text.substring(0, 1);
-        if (drawableCache.containsKey(key)) return drawableCache.get(key);
+        { Drawable cached = drawableCache.get(key); if (cached != null) return cached; }
         int randomColor = getRandomColor();
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
@@ -218,7 +231,7 @@ public class ImgUtil {
         if (height <= 0) height = 240;
         if (cornerRadius <= 0) cornerRadius = 1;
         String key = "placeholder_" + width + "x" + height + "_" + (int) cornerRadius;
-        if (drawableCache.containsKey(key)) return drawableCache.get(key);
+        { Drawable cached = drawableCache.get(key); if (cached != null) return cached; }
 
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
