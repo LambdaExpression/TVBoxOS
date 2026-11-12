@@ -25,6 +25,7 @@ import com.github.tvbox.osc.base.BaseLazyFragment;
 import com.github.tvbox.osc.bean.IJKCode;
 import com.github.tvbox.osc.bean.SourceBean;
 import com.github.tvbox.osc.event.RefreshEvent;
+import com.github.tvbox.osc.ui.activity.DriveLoginActivity;
 import com.github.tvbox.osc.ui.activity.LocalFileActivity;
 import com.github.tvbox.osc.ui.activity.SettingActivity;
 import com.github.tvbox.osc.ui.adapter.ApiHistoryDialogAdapter;
@@ -969,8 +970,7 @@ public class ModelSettingFragment extends BaseLazyFragment {
     }
 
     /**
-     * 打开订阅里的「我的云盘」，用爬虫包自带的登录。登录状态不由应用保存。
-     * 会把当前首页站源换成这个站点，登完可以在首页站源里切回去。
+     * 打开订阅里的「我的云盘」独立页完成登录。不改首页站源，登完按返回键回到设置。
      *
      * @param view 被点击的设置行
      */
@@ -981,14 +981,9 @@ public class ModelSettingFragment extends BaseLazyFragment {
             Toast.makeText(mContext, "当前配置里没有我的云盘", Toast.LENGTH_SHORT).show();
             return;
         }
-        ApiConfig.get().setSourceBean(drive);
-        if (tvHomeApi != null && drive.getName() != null) {
-            tvHomeApi.setText(drive.getName());
-        }
-        EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_HOME_SOURCE_CHANGE));
-        if (mActivity != null) {
-            mActivity.finish();
-        }
+        Bundle bundle = new Bundle();
+        bundle.putString(DriveLoginActivity.EXTRA_SOURCE_KEY, drive.getKey());
+        jumpActivity(DriveLoginActivity.class, bundle);
     }
 
     /**
