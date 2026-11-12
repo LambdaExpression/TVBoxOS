@@ -319,6 +319,7 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
             mMediaPlayer.setDataSource(mAssetFileDescriptor);
             return true;
         } else if (!TextUtils.isEmpty(mUrl)) {
+            mMediaPlayer.setPlaybackCacheScope(mProgressKey);
             mMediaPlayer.setDataSource(mUrl, mHeaders);
             return true;
         }

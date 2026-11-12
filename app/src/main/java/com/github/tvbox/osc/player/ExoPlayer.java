@@ -94,6 +94,9 @@ public class ExoPlayer extends ExoMediaPlayer {
                         DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
                         DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
                         DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+                // 前面仍只预读默认的大约 50 秒，避免电视盒子把整段往后的内容都放进内存。
+                // 最近 20 秒留在内存里，来回拖这一小段不用再读盘；更早看过的部分走磁盘缓存。
+                .setBackBuffer(20_000, true)
                 .build());
         setRenderersFactory(buildRenderersFactory(context));
         LOG.i("echo-exo-low-memory-load-control");
@@ -151,21 +154,26 @@ public class ExoPlayer extends ExoMediaPlayer {
         resetBufferingRecovery();
         defaultSubtitleTrackSelected = false;
         defaultSubtitleTrackSelectionClosed = false;
-        applyPlaybackCache();
+        applyPlaybackCache(path);
         super.setDataSource(path, headers);
     }
 
     /**
-     * 直播不写磁盘缓存。点播是否缓存、上限多少，都读设置，下次开播生效。
+     * 直播不写磁盘缓存。点播是否缓存、上限、这一集的标识，都在开播前交给媒体源。
+     *
+     * @param path 这次播放地址，可空
      */
-    private void applyPlaybackCache() {
+    private void applyPlaybackCache(String path) {
         if (mMediaSourceHelper == null) {
             return;
         }
         boolean live = Hawk.get(HawkConfig.PLAYER_IS_LIVE, false);
         boolean enabled = !live && HawkConfig.exoCachePlayEnabled();
-        mMediaSourceHelper.setPlaybackCache(enabled, PlayerHelper.exoCacheSizeBytes());
-        LOG.i("echo-exo-cache enabled=" + enabled + " sizeMb=" + PlayerHelper.exoCacheSizeMb());
+        String scope = enabled ? getPlaybackCacheScope() : "";
+        mMediaSourceHelper.setPlaybackCache(enabled, PlayerHelper.exoCacheSizeBytes(), scope, enabled ? path : "");
+        LOG.i("echo-exo-cache enabled=" + enabled
+                + " sizeMb=" + PlayerHelper.exoCacheSizeMb()
+                + " scope=" + (scope == null || scope.length() == 0 ? 0 : 1));
     }
 
     private boolean shouldCheckBuffering() {

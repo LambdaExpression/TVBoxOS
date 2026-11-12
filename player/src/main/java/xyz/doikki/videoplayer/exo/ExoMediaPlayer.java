@@ -54,6 +54,8 @@ public class ExoMediaPlayer extends AbstractPlayer implements Player.Listener {
     protected String currentPlayPath;
     protected Map<String, String> currentHeaders;
     private boolean mRetriedAsHls;
+    /** 当前这一集的缓存标识，由播放页在开播前写入。 */
+    private String playbackCacheScope = "";
 
     public ExoMediaPlayer(Context context) {
         mAppContext = context.getApplicationContext();
@@ -67,7 +69,8 @@ public class ExoMediaPlayer extends AbstractPlayer implements Player.Listener {
                     .setBufferDurationsMs(15_000, 30_000, 1_000, 3_000)
                     .setTargetBufferBytes(32 * 1024 * 1024)
                     .setPrioritizeTimeOverSizeThresholds(false)
-                    .setBackBuffer(0, false)
+                    // 没单独设置缓冲时，最近 20 秒留在内存，短距离回拖不用重新读。
+                    .setBackBuffer(20_000, true)
                     .build();
         }
         mInternalPlayer = new SimpleExoPlayer.Builder(
@@ -100,6 +103,23 @@ public class ExoMediaPlayer extends AbstractPlayer implements Player.Listener {
 
     public void setLoadControl(LoadControl loadControl) {
         mLoadControl = loadControl;
+    }
+
+    /**
+     * 记下这一集的缓存标识。真正开播时交给媒体源，用来找回上次看过的片段。
+     *
+     * @param scope 播放页进度键，可空
+     */
+    @Override
+    public void setPlaybackCacheScope(String scope) {
+        playbackCacheScope = scope == null ? "" : scope;
+    }
+
+    /**
+     * @return 这一集的缓存标识，没有时是空串
+     */
+    protected String getPlaybackCacheScope() {
+        return playbackCacheScope == null ? "" : playbackCacheScope;
     }
 
     @Override

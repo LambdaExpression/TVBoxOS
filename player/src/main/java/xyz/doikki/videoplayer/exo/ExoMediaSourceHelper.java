@@ -15,8 +15,10 @@ import com.google.android.exoplayer2.source.dash.DashMediaSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.source.rtsp.RtspMediaSource;
 import com.google.android.exoplayer2.upstream.DataSource;
+import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.cache.Cache;
 import com.google.android.exoplayer2.upstream.cache.CacheDataSource;
+import com.google.android.exoplayer2.upstream.cache.CacheKeyFactory;
 import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor;
 import com.google.android.exoplayer2.upstream.cache.SimpleCache;
 
@@ -27,7 +29,7 @@ import java.util.Map;
 import okhttp3.OkHttpClient;
 
 /**
- * 按地址创建 Exo 媒体源。点播缓存打开时，http 片段写入同一块磁盘缓存。
+ * 按地址创建 Exo 媒体源。点播缓存打开时，已看过的片段按剧集写入同一块磁盘缓存。
  */
 public final class ExoMediaSourceHelper {
     public static final String HEADER_FORMAT = "TVBox-Format";
@@ -45,6 +47,10 @@ public final class ExoMediaSourceHelper {
     private long cacheMaxBytes = 512L * 1024 * 1024;
     /** 当前这块缓存实际使用的上限。 */
     private long cacheBuiltBytes;
+    /** 这一集的稳定标识。空表示只能按去掉签名后的地址缓存。 */
+    private volatile String playbackCacheScope = "";
+    /** 这次开播的主地址。整段文件的分段请求都归到这一集，而不是归到会变的地址。 */
+    private volatile String playbackMainUrl = "";
 
     private ExoMediaSourceHelper(Context context) {
         mAppContext = context.getApplicationContext();
@@ -105,10 +111,13 @@ public final class ExoMediaSourceHelper {
             case C.TYPE_DASH:
                 return new DashMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(contentUri));
             case C.TYPE_HLS:
-                return new HlsMediaSource.Factory(factory)
+                HlsMediaSource.Factory hlsFactory = new HlsMediaSource.Factory(factory)
                         .setExtractorFactory(new ResyncHlsExtractorFactory())
-                        .setLoadErrorHandlingPolicy(new HlsErrorHandlingPolicy())  // 切片快速重试并兼容TS同步异常，保留默认回退
-                        .createMediaSource(MediaItem.fromUri(contentUri));
+                        .setLoadErrorHandlingPolicy(new HlsErrorHandlingPolicy());  // 切片快速重试并兼容TS同步异常，保留默认回退
+                if (playbackCacheEnabled && playbackCacheScope != null && playbackCacheScope.length() > 0) {
+                    hlsFactory.setPlaylistParserFactory(new PlaybackCachePlaylistParser(playbackCacheScope));
+                }
+                return hlsFactory.createMediaSource(MediaItem.fromUri(contentUri));
             default:
             case C.TYPE_OTHER:
                 return new ProgressiveMediaSource.Factory(factory).createMediaSource(MediaItem.fromUri(contentUri));
@@ -182,14 +191,18 @@ public final class ExoMediaSourceHelper {
     }
 
     /**
-     * 点播开始前设置这次是否缓存，以及上限。上限变了不立刻拆掉正在用的缓存，下次创建媒体源时再建。
+     * 点播开始前设置这次是否缓存、上限，以及这一集的标识。上限变了不立刻拆掉正在用的缓存，下次创建媒体源时再建。
      *
      * @param enabled 点播缓存开关。直播传 false
      * @param maxBytes 上限字节数，小于等于 0 时用 512MB
+     * @param scope 这一集的稳定标识，可空。空则只按去掉签名后的地址缓存
+     * @param mainUrl 这次开播的主地址，可空
      */
-    public void setPlaybackCache(boolean enabled, long maxBytes) {
+    public void setPlaybackCache(boolean enabled, long maxBytes, String scope, String mainUrl) {
         playbackCacheEnabled = enabled;
         cacheMaxBytes = maxBytes > 0 ? maxBytes : 512L * 1024 * 1024;
+        playbackCacheScope = !enabled || scope == null ? "" : scope;
+        playbackMainUrl = !enabled || mainUrl == null ? "" : mainUrl;
     }
 
     /**
@@ -216,7 +229,13 @@ public final class ExoMediaSourceHelper {
         }
         return new CacheDataSource.Factory()
                 .setCache(mCache)
-                .setUpstreamDataSourceFactory(getDataSourceFactory())
+                .setUpstreamDataSourceFactory(new HintStrippingDataSource.Factory(getDataSourceFactory()))
+                .setCacheKeyFactory(new CacheKeyFactory() {
+                    @Override
+                    public String buildCacheKey(DataSpec dataSpec) {
+                        return PlaybackCacheKeys.build(playbackCacheScope, playbackMainUrl, dataSpec);
+                    }
+                })
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
     }
 

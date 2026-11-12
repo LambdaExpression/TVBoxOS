@@ -54,6 +54,14 @@ public abstract class AbstractPlayer {
     public abstract void setDataSource(String path, Map<String, String> headers);
 
     /**
+     * 这一集的缓存标识。Exo 用来把换过地址的同一集认成同一份已看缓存。其它播放器忽略。
+     *
+     * @param scope 播放页进度键，可空
+     */
+    public void setPlaybackCacheScope(String scope) {
+    }
+
+    /**
      * 用于播放raw和asset里面的视频文件
      */
     public abstract void setDataSource(AssetFileDescriptor fd);
