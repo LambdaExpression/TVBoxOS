@@ -227,8 +227,10 @@ public class GridFragment extends BaseLazyFragment {
             mGridView.setVisibility(View.VISIBLE);
         }
         mGridView.setHasFixedSize(true);
-        style=ImgUtil.initStyle();
-        gridAdapter = new GridAdapter(isFolederMode(), style);
+        style = ImgUtil.initStyle();
+        // 网盘登录等固定站源页保持原列数和比例，只把格子等比缩小一点。
+        float sizeScale = fixedSourceKey != null ? 0.8f : 1f;
+        gridAdapter = new GridAdapter(isFolederMode(), style, sizeScale);
         this.page =1;
         this.maxPage =1;
         this.isLoad = false;
