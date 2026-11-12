@@ -105,6 +105,7 @@ public class HomeActivity extends BaseActivity {
     private boolean homeSortPending = false;
     private boolean refreshHomeRec = false;
     private final Handler mHandler = new Handler();
+    private boolean clearingCache = false;
     private long mExitTime = 0;
     private boolean eventBusRegistered = false;
     private final Runnable mRunnable = new Runnable() {
@@ -280,25 +281,35 @@ public class HomeActivity extends BaseActivity {
             public void onClick(View v) {
                 FastClickCheckUtil.check(v);
                 if(dataInitOk && jarInitOk){
+                    if (clearingCache) return; // 正在清理时忽略重复点击
+                    clearingCache = true;
                     String jar=ApiConfig.get().getHomeSourceBean().getJar();
                     String jarUrl=!jar.isEmpty()?jar:ApiConfig.get().getSpider();
                     String jarSource = jarUrl.split(";md5;")[0];
                     File cspCacheDir = new File(FileUtils.getFilePath() + "/csp/" + MD5.string2MD5(jarSource) + ".jar");
                     File jarCacheDir = new File(FileUtils.getCachePath() + "/jar/" + MD5.string2MD5(jarSource) + ".jar");
                     File jarFullCacheDir = new File(FileUtils.getCachePath() + "/jar/" + MD5.string2MD5(jarUrl) + ".jar");
-                    Toast.makeText(mContext, "缓存已清除", Toast.LENGTH_LONG).show();
                     new Thread(() -> {
+                        boolean ok = false;
                         try {
                             FileUtils.deleteFile(cspCacheDir);
                             FileUtils.deleteFile(jarCacheDir);
                             FileUtils.deleteFile(jarFullCacheDir);
                             FileUtils.clearSpiderCacheFiles();
                             ApiConfig.get().clearSpiderCache();
-                            refreshHome();
+                            ok = true;
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
-                    }).start();
+                        final boolean success = ok;
+                        // 清完之后再回到主线程提示，失败也要告诉用户。
+                        mHandler.post(() -> {
+                            clearingCache = false;
+                            if (isActivityUnavailable()) return;
+                            Toast.makeText(mContext, success ? "缓存已清除" : "缓存清除失败", Toast.LENGTH_LONG).show();
+                            if (success) refreshHome();
+                        });
+                    }, "tvbox-clear-cache").start();
 
                 }else {
                     jumpActivity(SettingActivity.class);
