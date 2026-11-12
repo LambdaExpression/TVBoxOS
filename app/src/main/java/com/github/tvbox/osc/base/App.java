@@ -62,14 +62,25 @@ public class App extends MultiDexApplication {
                 .setSupportSubunits(Subunits.MM);
         PlayerHelper.init();
         QuickJSLoader.init();
-        FileUtils.cleanPlayerCache();
+        // 清理播放缓存是递归删文件的磁盘操作，放到后台，不占用冷启动时间。
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    FileUtils.cleanPlayerCache();
+                } catch (Throwable th) {
+                    LOG.e(th.toString());
+                }
+            }
+        }, "tvbox-clean-cache").start();
     }
 
     private void initParams() {
         // Hawk
         Hawk.init(this).build();
-        Hawk.put(HawkConfig.DEBUG_OPEN, false);
-        Hawk.put(HawkConfig.PLAYER_IS_LIVE, false);
+        // 值没变就不写盘，少一次启动期的 SharedPreferences 写入。
+        if (Hawk.get(HawkConfig.DEBUG_OPEN, true)) Hawk.put(HawkConfig.DEBUG_OPEN, false);
+        if (Hawk.get(HawkConfig.PLAYER_IS_LIVE, true)) Hawk.put(HawkConfig.PLAYER_IS_LIVE, false);
         if (!Hawk.contains(HawkConfig.PLAY_TYPE)) {
             Hawk.put(HawkConfig.PLAY_TYPE, 2);
         } else if (Hawk.get(HawkConfig.PLAY_TYPE, 2) == 0) {
