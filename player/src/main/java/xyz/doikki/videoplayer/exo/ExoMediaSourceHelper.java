@@ -227,7 +227,7 @@ public final class ExoMediaSourceHelper {
         if (mCache == null) {
             return getDataSourceFactory();
         }
-        return new CacheDataSource.Factory()
+        DataSource.Factory cacheFactory = new CacheDataSource.Factory()
                 .setCache(mCache)
                 .setUpstreamDataSourceFactory(new HintStrippingDataSource.Factory(getDataSourceFactory()))
                 .setCacheKeyFactory(new CacheKeyFactory() {
@@ -237,6 +237,7 @@ public final class ExoMediaSourceHelper {
                     }
                 })
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+        return UnknownLengthCacheDataSource.wrap(cacheFactory);
     }
 
     /**
