@@ -80,6 +80,7 @@ public class HawkConfig {
     public static final String LIVE_WEB_HEADER = "live_web_header";
     public static final String DEFAULT_LOAD_LIVE = "DEFAULT_LOAD_LIVE";
     public static final String SEARCH_HISTORY = "search_history";
+    /** 弹幕总开关。没存过时默认关闭。 */
     public static final String DANMU_OPEN = "danmu_open";
     public static final String DANMU_MAX_LINE = "danmu_max_line";
     public static final String DANMU_SPEED = "danmu_speed";

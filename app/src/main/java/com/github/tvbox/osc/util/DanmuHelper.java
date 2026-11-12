@@ -4,6 +4,9 @@ import android.graphics.Color;
 
 import com.orhanobut.hawk.Hawk;
 
+/**
+ * 弹幕开关和显示参数。开关只认用户存过的值，没存过按关闭。
+ */
 public class DanmuHelper {
     private static final String[] PALETTE = new String[]{
             "#ffffff", "#70f3ff", "#44cef6", "#3eede7", "#00e079", "#2edfa3",
@@ -11,8 +14,11 @@ public class DanmuHelper {
             "#ef7a82", "#ff0097", "#b0a4e3", "#4b5cc4"
     };
 
+    /**
+     * 弹幕是否打开。没存过按关闭，设置页和播放页都走这里。
+     */
     public static boolean isOpen() {
-        return Hawk.get(HawkConfig.DANMU_OPEN, true);
+        return Hawk.get(HawkConfig.DANMU_OPEN, false);
     }
 
     public static void setOpen(boolean open) {
