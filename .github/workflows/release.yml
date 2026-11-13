@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # ubuntu-latest 已指向 26.04，actions/setup-python 没有那个系统的 Python 3.8。固定到 22.04。
+    runs-on: ubuntu-22.04
     steps:
       - name: 取出当前仓库
         uses: actions/checkout@v4
