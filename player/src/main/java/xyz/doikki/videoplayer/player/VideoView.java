@@ -33,6 +33,7 @@ import java.util.Map;
 
 import xyz.doikki.videoplayer.controller.BaseVideoController;
 import xyz.doikki.videoplayer.controller.MediaPlayerControl;
+import xyz.doikki.videoplayer.exo.ExoMediaPlayer;
 import xyz.doikki.videoplayer.render.IRenderView;
 import xyz.doikki.videoplayer.render.RenderViewFactory;
 import xyz.doikki.videoplayer.util.L;
@@ -88,6 +89,11 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
     private ResumeGate mResumeGate;
     /** 过渡结束时的那次 start 不再进入过渡。 */
     private boolean mSkipResumeGate;
+
+    /** 首次开播：正在等“缓冲完成”和“声音就绪”两件事都到齐，期间播放器保持暂停。 */
+    private boolean mHoldForAudio;
+    private boolean mHoldPrepared;
+    private boolean mHoldAudioReady;
     protected Map<String, String> mHeaders;//当前视频地址的请求头
     protected AssetFileDescriptor mAssetFileDescriptor;//assets文件
 
@@ -250,6 +256,69 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
     }
 
     /**
+     * 首次开播时和缓冲并行预热声卡，缓冲完成且声音就绪后才真正开播。
+     * 等待期间状态保持 PREPARING，控制器的加载圈会一直转。
+     * 目前只对 Exo 生效，其它播放核心按原来的方式直接播放。
+     */
+    private void beginAudioHoldForFirstPlay() {
+        if (mMediaPlayer == null
+                || !(mMediaPlayer instanceof ExoMediaPlayer)
+                || !mEnableAudioFocus
+                || isMute()
+                || mCurrentPlayState != STATE_PREPARING) {
+            return;
+        }
+        mHoldForAudio = true;
+        mHoldPrepared = false;
+        mHoldAudioReady = false;
+        // Exo 初始化时设了“准备好就播”，这里先压住，缓冲完也只停在第一帧。
+        mMediaPlayer.pause();
+        warmUpAudio(new Runnable() {
+            @Override
+            public void run() {
+                if (!mHoldForAudio) {
+                    return;
+                }
+                mHoldAudioReady = true;
+                releaseAudioHoldIfReady();
+            }
+        });
+    }
+
+    /**
+     * 缓冲和声音都就绪后放行：补上 PREPARED，再开播并进入 PLAYING。
+     */
+    private void releaseAudioHoldIfReady() {
+        if (!mHoldForAudio || !mHoldPrepared || !mHoldAudioReady || mMediaPlayer == null) {
+            return;
+        }
+        mHoldForAudio = false;
+        AudioResumeWarmup.cancel();
+        setPlayState(STATE_PREPARED);
+        mMediaPlayer.start();
+        setPlayState(STATE_PLAYING);
+        mPlayerContainer.setKeepScreenOn(true);
+    }
+
+    /**
+     * 放弃首次开播的等待。
+     *
+     * @param resumePlayer true 时把被压住的播放器放开，用于重置后继续自己播放
+     */
+    private void abortAudioHold(boolean resumePlayer) {
+        if (!mHoldForAudio) {
+            return;
+        }
+        mHoldForAudio = false;
+        mHoldPrepared = false;
+        mHoldAudioReady = false;
+        AudioResumeWarmup.cancel();
+        if (resumePlayer && mMediaPlayer != null) {
+            mMediaPlayer.start();
+        }
+    }
+
+    /**
      * 过渡已经结束，这次开始播放不再等声音。
      */
     public void startSkippingResumeGate() {
@@ -284,6 +353,7 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
         initPlayer();
         addDisplay();
         startPrepare(false);
+        beginAudioHoldForFirstPlay();
         return true;
     }
 
@@ -363,6 +433,8 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
 
     protected void startPrepare(boolean reset, boolean rebindRenderView) {
         if (reset) {
+            // 重置会换掉当前的准备流程，旧的等待作废，并把被压住的播放器放开。
+            abortAudioHold(true);
             mMediaPlayer.reset();
             //重新设置option，media player reset之后，option会失效
             setOptions();
@@ -477,6 +549,7 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
      * 释放播放器
      */
     public void release() {
+        abortAudioHold(false);
         if (!isInIdleState()) {
             //释放播放器
             if (mMediaPlayer != null) {
@@ -653,6 +726,15 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
         if (mCurrentPosition > 0 && !mMediaPlayer.isStartPositionApplied()) {
             mMediaPlayer.seekTo(mCurrentPosition);
         }
+        if (mHoldForAudio) {
+            // 还在等声音：先记下缓冲完成，保持 PREPARING 让加载圈继续转。
+            mHoldPrepared = true;
+            if (!isMute() && mAudioFocusHelper != null) {
+                mAudioFocusHelper.requestFocus();
+            }
+            releaseAudioHoldIfReady();
+            return;
+        }
         setPlayState(STATE_PREPARED);
         if (!isMute() && mAudioFocusHelper != null) {
             mAudioFocusHelper.requestFocus();
@@ -664,6 +746,10 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
      */
     @Override
     public void onInfo(int what, int extra) {
+        // 等声音期间不改变播放状态，否则加载圈会提前消失；放行时统一补状态。
+        if (mHoldForAudio && what != AbstractPlayer.MEDIA_INFO_VIDEO_ROTATION_CHANGED) {
+            return;
+        }
         switch (what) {
             case AbstractPlayer.MEDIA_INFO_BUFFERING_START:
                 setPlayState(STATE_BUFFERING);
@@ -686,6 +772,7 @@ public class VideoView<P extends AbstractPlayer> extends FrameLayout
      */
     @Override
     public void onError() {
+        abortAudioHold(false);
         mPlayerContainer.setKeepScreenOn(false);
         setPlayState(STATE_ERROR);
     }
